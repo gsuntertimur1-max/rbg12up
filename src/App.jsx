@@ -303,17 +303,17 @@ export default function App() {
     showNotif("Konfigurasi Sistem Diperbarui");
   };
 
-  // TAMPILAN LOGIN
+  // TAMPILAN LOGIN (SUDAH DIPERBAIKI)
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   if (!currentUser) return (
-    <div className="min-h-screen flex items-center justify-center bg-red-600 p-4">
-      <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white p-8 rounded-2xl shadow-lg border border-slate-200 w-full max-w-sm">
         <h1 className="text-2xl font-black text-center mb-6 text-slate-800">{systemConfig.name}</h1>
         {loginError && <p className="text-red-500 text-sm mb-4 font-semibold text-center">{loginError}</p>}
         <form onSubmit={handleLogin} className="space-y-4">
           <input className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 transition-colors" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
           <input className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 transition-colors" type="password" placeholder="Password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm, password: e.target.value})} />
-          <button className="w-full bg-red-600 text-white font-bold py-3 rounded-lg hover:bg-red-700 transition-colors shadow-lg">Login ke Sistem</button>
+          <button className="w-full bg-red-600 text-white font-bold py-3 rounded-lg hover:bg-red-700 transition-colors shadow-md">Login ke Sistem</button>
         </form>
       </div>
     </div>
@@ -541,7 +541,7 @@ export default function App() {
             {activeTabSettings === 'sku' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
                 
-                {/* FORM INPUT MANUAL (KEMBALI HADIR) */}
+                {/* FORM INPUT MANUAL */}
                 <form onSubmit={handleAddManualSku} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
                   <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
                     <PlusCircle size={20} className="text-red-600"/>
