@@ -140,7 +140,6 @@ export default function App() {
   const [formData, setFormData] = useState(initialFormData);
   const [outboundSelections, setOutboundSelections] = useState({});
 
-  // Form untuk Tambah SKU Manual
   const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG" });
 
   useEffect(() => {
@@ -184,7 +183,6 @@ export default function App() {
 
   const handleLogout = () => { setCurrentUser(null); localStorage.removeItem("rebagging_session"); setActiveMenu("dashboard"); };
 
-  // FUNGSI TRANSAKSI
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
     const date = new Date().toISOString();
@@ -197,19 +195,17 @@ export default function App() {
       batchData = { batchId, skuId: sku.id, initialQty: qty, currentQty: qty, sourceWarehouse: formData.inSourceWarehouse, date };
       txData = { id: `TRX-${Date.now()}`, date, type: "INBOUND", skuId: sku.id, skuName: sku.name, qtyChange: qty, unit: sku.unit, operator: currentUser.username, sourceWarehouse: formData.inSourceWarehouse };
       batchUpdates.push({ type: 'set', id: batchId, data: batchData });
-
     } else if (activeOpTab === "rebagging") {
       const b1 = inventoryBatches.find(b => b.batchId === formData.bulkBatchId);
       const targetSku = skus.find(s => s.id === formData.rebagTargetSkuId);
       const qty = parseFloat(formData.qtyToProcess) || 0;
       if (qty > b1.currentQty) return alert("Qty melebihi stok!");
-      const resultQty = qty; // Asumsi 1:1 jika konversi tidak diset
+      const resultQty = qty;
       const newBatchId = `RBG-${Date.now()}`;
       batchData = { batchId: newBatchId, skuId: targetSku.id, currentQty: resultQty, sourceWarehouse: b1.sourceWarehouse, targetStack: formData.rebagTargetStack, date };
       txData = { id: `TRX-${Date.now()}`, date, type: "REBAGGING", skuId: targetSku.id, skuName: targetSku.name, qtyChange: resultQty, unit: targetSku.unit, operator: currentUser.username, targetStack: formData.rebagTargetStack };
       batchUpdates.push({ type: 'update', id: b1.batchId, data: { ...b1, currentQty: b1.currentQty - qty } });
       batchUpdates.push({ type: 'set', id: newBatchId, data: batchData });
-
     } else if (activeOpTab === "outbound") {
       let hasOutbound = false;
       Object.entries(outboundSelections).forEach(([bId, qtyStr]) => {
@@ -232,18 +228,16 @@ export default function App() {
     setFormData(initialFormData); setOutboundSelections({});
   };
 
-  // FUNGSI TAMBAH SKU MANUAL
   const handleAddManualSku = async (e) => {
     e.preventDefault();
     if (!newSku.id || !newSku.name) return alert("ID dan Nama SKU wajib diisi!");
     if (db) {
       await setDoc(doc(db, "artifacts", appId, "public", "data", "skus", newSku.id.toString()), newSku);
       showNotif(`SKU ${newSku.name} Berhasil Ditambahkan`);
-      setNewSku({ id: "", name: "", type: "bulk", unit: "KG" }); // Reset Form
+      setNewSku({ id: "", name: "", type: "bulk", unit: "KG" });
     }
   };
 
-  // RECHARTS DATA
   const stockByWarehouseData = useMemo(() => {
     const data = {};
     inventoryBatches.filter(b => b.currentQty > 0).forEach(b => {
@@ -261,7 +255,6 @@ export default function App() {
     { name: 'Barang Jadi', value: skus.filter(s=>s.type==='rebagged').length }
   ];
 
-  // IMPORT/EXPORT EXCEL
   const handleImportExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -303,17 +296,24 @@ export default function App() {
     showNotif("Konfigurasi Sistem Diperbarui");
   };
 
-  // TAMPILAN LOGIN (SUDAH DIPERBAIKI)
+  // TAMPILAN LOGIN (Logo di atas tulisan)
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   if (!currentUser) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <div className="bg-white p-8 rounded-2xl shadow-lg border border-slate-200 w-full max-w-sm">
-        <h1 className="text-2xl font-black text-center mb-6 text-slate-800">{systemConfig.name}</h1>
+      <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-200 w-full max-w-md">
+        
+        <div className="flex flex-col items-center justify-center mb-8">
+          {systemConfig.logo && (
+            <img src={systemConfig.logo} alt="Logo" className="w-48 h-auto mb-4 object-contain" />
+          )}
+          <h1 className="text-2xl font-black text-center text-slate-800">{systemConfig.name}</h1>
+        </div>
+
         {loginError && <p className="text-red-500 text-sm mb-4 font-semibold text-center">{loginError}</p>}
-        <form onSubmit={handleLogin} className="space-y-4">
-          <input className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 transition-colors" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
-          <input className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 transition-colors" type="password" placeholder="Password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm, password: e.target.value})} />
-          <button className="w-full bg-red-600 text-white font-bold py-3 rounded-lg hover:bg-red-700 transition-colors shadow-md">Login ke Sistem</button>
+        <form onSubmit={handleLogin} className="space-y-5">
+          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
+          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all" type="password" placeholder="Password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm, password: e.target.value})} />
+          <button className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-colors shadow-lg mt-2">Login ke Sistem</button>
         </form>
       </div>
     </div>
@@ -323,13 +323,20 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex font-sans">
       {notification && <div className="fixed top-4 right-4 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl z-50 font-semibold animate-bounce flex items-center gap-2"><CheckCircle size={18}/> {notification}</div>}
       
-      {/* SIDEBAR */}
+      {/* SIDEBAR (Logo di atas tulisan) */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col">
-        <div className="p-5 border-b border-slate-800 font-bold flex items-center gap-3">
-          {systemConfig.logo ? <img src={systemConfig.logo} alt="logo" className="w-8 h-8 rounded bg-white object-contain" /> : <Package />}
-          <span className="truncate">{systemConfig.name}</span>
+        <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-4 text-center">
+          {systemConfig.logo ? (
+            <div className="bg-white p-3 rounded-xl w-full flex justify-center">
+               <img src={systemConfig.logo} alt="logo" className="w-32 h-auto object-contain" />
+            </div>
+          ) : (
+            <Package size={36} />
+          )}
+          <span className="font-bold text-lg leading-tight w-full break-words">{systemConfig.name}</span>
         </div>
-        <nav className="p-4 flex-1 space-y-1.5 text-sm">
+        
+        <nav className="p-4 flex-1 space-y-1.5 text-sm mt-2">
           <button onClick={()=>setActiveMenu("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
           <button onClick={()=>setActiveMenu("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
           {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>setActiveMenu("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
@@ -532,7 +539,7 @@ export default function App() {
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">URL Logo (Opsional)</label>
                   <p className="text-xs text-slate-500 mb-3">Biarkan kosong jika ingin menggunakan ikon kotak default.</p>
-                  <input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.logo || ""} onChange={e=>setSystemConfig({...systemConfig, logo: e.target.value})} placeholder="https://..." />
+                  <input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.logo || ""} onChange={e=>setSystemConfig({...systemConfig, logo: e.target.value})} placeholder="Contoh: /logo.png" />
                 </div>
                 <button className="bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Perubahan Sistem</button>
               </form>
@@ -540,7 +547,6 @@ export default function App() {
             
             {activeTabSettings === 'sku' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-                
                 {/* FORM INPUT MANUAL */}
                 <form onSubmit={handleAddManualSku} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
                   <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
@@ -578,7 +584,6 @@ export default function App() {
                     <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
                   </label>
                 </div>
-                
               </div>
             )}
           </div>
