@@ -134,7 +134,6 @@ export default function App() {
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
 
-  // STATE UNTUK MENU HP
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const initialFormData = {
@@ -273,7 +272,6 @@ export default function App() {
     }
   };
 
-  // PERBAIKAN GRAFIK BATANG: Memberi data default jika stok kosong
   const stockByWarehouseData = useMemo(() => {
     const data = {};
     let hasData = false;
@@ -392,8 +390,8 @@ export default function App() {
         <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)}></div>
       )}
 
-      {/* SIDEBAR DENGAN KOTAK LOGO YANG LEBIH ELEGAN */}
-      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 h-full overflow-y-auto shadow-2xl md:shadow-none`}>
+      {/* SIDEBAR - PERBAIKAN: Selalu full height dengan min-h-screen */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 min-h-screen overflow-y-auto shadow-2xl md:shadow-none`}>
         
         {/* LOGO DI DESKTOP */}
         <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-5 text-center hidden md:flex mt-2">
@@ -428,7 +426,6 @@ export default function App() {
         <button onClick={handleLogout} className="mx-4 mb-4 p-3 bg-slate-800 hover:bg-red-600 transition-colors rounded-lg flex justify-center items-center gap-2 text-slate-300 hover:text-white font-bold"><LogOut size={16}/> Keluar</button>
       </aside>
 
-      {/* CONTENT UTAMA DENGAN BATAS LEBAR (max-w-7xl) AGAR TIDAK MELAR DI LAYAR LEBAR */}
       <main className="flex-1 p-4 sm:p-8 overflow-y-auto w-full bg-slate-50">
         <div className="max-w-7xl mx-auto">
           
@@ -438,7 +435,6 @@ export default function App() {
               <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Dashboard Statistik</h1>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
-                {/* GRAFIK BATANG YANG SUDAH DIPERBAIKI */}
                 <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-200 h-80 sm:h-96">
                   <h3 className="font-bold mb-4 text-slate-700">Stok Berdasarkan Gudang Asal</h3>
                   <ResponsiveContainer width="100%" height="85%">
@@ -454,7 +450,6 @@ export default function App() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* GRAFIK LINGKARAN TANPA GARIS LABEL BERANTAKAN */}
                 <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-200 h-80 sm:h-96">
                   <h3 className="font-bold mb-4 text-slate-700">Komposisi Master SKU</h3>
                   <ResponsiveContainer width="100%" height="85%">
