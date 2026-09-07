@@ -3,7 +3,8 @@ import {
   Package, Download, UserPlus, Trash2, Home, PackagePlus,
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
-  Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye
+  Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye,
+  Menu, X
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
@@ -133,6 +134,9 @@ export default function App() {
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
 
+  // STATE UNTUK MENU HP (MOBILE SIDEBAR)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
   const initialFormData = {
     inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inSourceWarehouse: "",
     rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "", outSkuId: ""
@@ -174,10 +178,8 @@ export default function App() {
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   
-  // Fungsi Cek Hak Akses
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
 
-  // Fungsi Login Normal
   const handleLogin = (e) => {
     e.preventDefault();
     const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
@@ -185,7 +187,6 @@ export default function App() {
     else setLoginError("Username/password salah!");
   };
 
-  // Fungsi Login sebagai Tamu (View Only)
   const handleGuestLogin = () => {
     const guestUser = { username: "Tamu (View Only)", role: "Viewer" };
     setCurrentUser(guestUser);
@@ -194,6 +195,12 @@ export default function App() {
   };
 
   const handleLogout = () => { setCurrentUser(null); localStorage.removeItem("rebagging_session"); setActiveMenu("dashboard"); };
+
+  // Fungsi navigasi yang menutup sidebar saat diklik di HP
+  const handleNavClick = (menuName) => {
+    setActiveMenu(menuName);
+    setIsSidebarOpen(false);
+  };
 
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
@@ -330,29 +337,28 @@ export default function App() {
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   if (!currentUser) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-200 w-full max-w-md">
+      <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-xl border border-slate-200 w-full max-w-md">
         
         <div className="flex flex-col items-center justify-center mb-8">
           {systemConfig.logo && (
-            <img src={systemConfig.logo} alt="Logo" className="w-48 h-auto mb-4 object-contain" />
+            <img src={systemConfig.logo} alt="Logo" className="w-40 sm:w-48 h-auto mb-4 object-contain" />
           )}
-          <h1 className="text-2xl font-black text-center text-slate-800">{systemConfig.name}</h1>
+          <h1 className="text-xl sm:text-2xl font-black text-center text-slate-800">{systemConfig.name}</h1>
         </div>
 
         {loginError && <p className="text-red-500 text-sm mb-4 font-semibold text-center">{loginError}</p>}
         <form onSubmit={handleLogin} className="space-y-4">
-          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
-          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all" type="password" placeholder="Password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm, password: e.target.value})} />
+          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all text-sm sm:text-base" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
+          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all text-sm sm:text-base" type="password" placeholder="Password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm, password: e.target.value})} />
           <button type="submit" className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-colors shadow-lg mt-2">Login ke Sistem</button>
         </form>
         
-        {/* TOMBOL GUEST / VIEW ONLY */}
         <div className="mt-6 flex items-center justify-center">
           <div className="h-px bg-slate-200 w-full"></div>
-          <span className="px-4 text-sm text-slate-400 font-medium">ATAU</span>
+          <span className="px-4 text-xs sm:text-sm text-slate-400 font-medium whitespace-nowrap">ATAU</span>
           <div className="h-px bg-slate-200 w-full"></div>
         </div>
-        <button onClick={handleGuestLogin} type="button" className="w-full mt-6 bg-white text-slate-600 border-2 border-slate-200 font-bold py-3.5 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center justify-center gap-2">
+        <button onClick={handleGuestLogin} type="button" className="w-full mt-6 bg-white text-slate-600 border-2 border-slate-200 font-bold py-3.5 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center justify-center gap-2 text-sm sm:text-base">
           <Eye size={18} className="text-slate-500"/> Masuk Tanpa Login (View Only)
         </button>
       </div>
@@ -360,12 +366,34 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex font-sans">
+    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
       {notification && <div className="fixed top-4 right-4 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl z-50 font-semibold animate-bounce flex items-center gap-2"><CheckCircle size={18}/> {notification}</div>}
       
+      {/* HEADER KHUSUS MOBILE (HP) */}
+      <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center z-40 sticky top-0 shadow-md">
+        <div className="flex items-center gap-3">
+          {systemConfig.logo ? (
+             <div className="bg-white p-1.5 rounded w-12 h-10 flex items-center justify-center">
+                <img src={systemConfig.logo} alt="logo" className="w-full h-full object-contain" />
+             </div>
+          ) : (
+             <Package size={28} />
+          )}
+          <span className="font-bold text-sm truncate">{systemConfig.name}</span>
+        </div>
+        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors">
+          {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
+        </button>
+      </div>
+
+      {/* OVERLAY GELAP UNTUK MOBILE (Jika Menu Terbuka) */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)}></div>
+      )}
+
       {/* SIDEBAR */}
-      <aside className="w-64 bg-slate-900 text-white flex flex-col">
-        <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-4 text-center">
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 h-full overflow-y-auto`}>
+        <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-4 text-center hidden md:flex">
           {systemConfig.logo ? (
             <div className="bg-white p-3 rounded-xl w-full flex justify-center">
                <img src={systemConfig.logo} alt="logo" className="w-32 h-auto object-contain" />
@@ -376,16 +404,23 @@ export default function App() {
           <span className="font-bold text-lg leading-tight w-full break-words">{systemConfig.name}</span>
         </div>
         
+        {/* LOGO DI MOBILE SIDEBAR HEADER */}
+        <div className="md:hidden p-4 border-b border-slate-800 flex justify-between items-center">
+           <span className="font-black text-lg tracking-wider text-slate-300">MENU UTAMA</span>
+           <button onClick={() => setIsSidebarOpen(false)} className="text-slate-400 hover:text-white"><X size={24}/></button>
+        </div>
+
         <nav className="p-4 flex-1 space-y-1.5 text-sm mt-2">
-          <button onClick={()=>setActiveMenu("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
-          <button onClick={()=>setActiveMenu("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
-          {/* BATASAN AKSES: Operasi dan Pengaturan disembunyikan dari Viewer */}
-          {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>setActiveMenu("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
-          <button onClick={()=>setActiveMenu("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
-          {hasAccess(["Super Admin"]) && <button onClick={()=>setActiveMenu("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
+          <button onClick={()=>handleNavClick("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
+          <button onClick={()=>handleNavClick("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
+          
+          {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
+          
+          <button onClick={()=>handleNavClick("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
+          
+          {hasAccess(["Super Admin"]) && <button onClick={()=>handleNavClick("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
         </nav>
         
-        {/* INFO USER AKTIF DI SIDEBAR */}
         <div className="px-4 py-3 bg-slate-800 mx-4 rounded-lg mb-2 text-center text-xs">
           <p className="text-slate-400">Login sebagai:</p>
           <p className="font-bold text-white truncate">{currentUser.username}</p>
@@ -394,14 +429,14 @@ export default function App() {
       </aside>
 
       {/* CONTENT UTAMA */}
-      <main className="flex-1 p-8 overflow-y-auto">
+      <main className="flex-1 p-4 sm:p-8 overflow-y-auto w-full max-w-full">
         
         {/* DASHBOARD */}
         {activeMenu === "dashboard" && (
           <div className="space-y-6">
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight">Dashboard Statistik</h1>
-            <div className="grid grid-cols-2 gap-6 h-96">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Dashboard Statistik</h1>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 h-80 sm:h-96">
                 <h3 className="font-bold mb-4 text-slate-700">Stok Berdasarkan Gudang Asal</h3>
                 <ResponsiveContainer width="100%" height="85%">
                   <BarChart data={stockByWarehouseData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
@@ -415,7 +450,7 @@ export default function App() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 h-80 sm:h-96">
                 <h3 className="font-bold mb-4 text-slate-700">Komposisi Master SKU</h3>
                 <ResponsiveContainer width="100%" height="85%">
                   <PieChart>
@@ -434,15 +469,15 @@ export default function App() {
         {/* INVENTORY */}
         {activeMenu === "inventory" && (
           <div className="space-y-6">
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight">Inventori Gudang</h1>
-            <div className="flex gap-6 border-b border-slate-200">
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Inventori Gudang</h1>
+            <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
               <button onClick={()=>setActiveInvTab('bulk')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='bulk'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Bahan Baku (Curah)</button>
               <button onClick={()=>setActiveInvTab('rebagged')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='rebagged'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Barang Jadi (Kemasan)</button>
             </div>
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <table className="w-full text-sm text-left">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
+              <table className="w-full text-sm text-left min-w-[600px]">
                 <thead className="bg-slate-50 text-slate-600">
-                  <tr><th className="p-4 font-semibold">ID SKU</th><th className="p-4 font-semibold">Nama Barang</th><th className="p-4 font-semibold">Gudang Asal</th><th className="p-4 font-semibold text-right">Total Stok Aktif</th></tr>
+                  <tr><th className="p-4 font-semibold whitespace-nowrap">ID SKU</th><th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th><th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th><th className="p-4 font-semibold text-right whitespace-nowrap">Total Stok Aktif</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {skus.filter(s=>s.type===activeInvTab).map(sku => {
@@ -468,15 +503,14 @@ export default function App() {
         {/* OPERATIONS */}
         {activeMenu === "operations" && hasAccess(["Super Admin", "Admin", "Operator"]) && (
           <div className="space-y-6">
-             <h1 className="text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
-             <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex gap-6 mb-8 border-b border-slate-200">
+             <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
+             <div className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex gap-4 sm:gap-6 mb-8 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
                   <button onClick={()=>setActiveOpTab('inbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='inbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Inbound (Masuk)</button>
                   <button onClick={()=>setActiveOpTab('rebagging')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='rebagging'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Proses Rebagging</button>
                   <button onClick={()=>setActiveOpTab('outbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='outbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Outbound (Keluar)</button>
                 </div>
                 <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-xl">
-                  {/* INBOUND UI */}
                   {activeOpTab === 'inbound' && (
                     <>
                       <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
@@ -484,7 +518,6 @@ export default function App() {
                       <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
                     </>
                   )}
-                  {/* REBAGGING UI */}
                   {activeOpTab === 'rebagging' && (
                     <>
                       <div><label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Asal (Sumber)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Bahan Baku..." /></div>
@@ -494,7 +527,6 @@ export default function App() {
                       <div><label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Lokasi Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
                     </>
                   )}
-                  {/* OUTBOUND UI */}
                   {activeOpTab === 'outbound' && (
                     <>
                       <div>
@@ -502,15 +534,15 @@ export default function App() {
                         <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={v=>setFormData({...formData, outSkuId:v})} placeholder="Cari SKU..." />
                       </div>
                       {formData.outSkuId && (
-                        <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
+                        <div className="bg-slate-50 p-4 sm:p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
                           <h4 className="font-bold text-sm text-slate-700 mb-2 border-b pb-2">Tentukan jumlah keluar dari masing-masing gudang asal:</h4>
                           {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).map(b => (
-                            <div key={b.batchId} className="flex justify-between items-center bg-white p-3 rounded-lg border shadow-sm">
+                            <div key={b.batchId} className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-3 rounded-lg border shadow-sm gap-3">
                               <div>
                                 <p className="font-bold text-slate-800 text-sm">{b.sourceWarehouse}</p>
                                 <p className="text-xs text-slate-500 font-mono mt-1">Stok Tersedia: <span className="font-bold text-blue-600">{b.currentQty}</span></p>
                               </div>
-                              <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
+                              <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-full sm:w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
                             </div>
                           ))}
                           {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).length === 0 && <p className="text-sm text-red-500 italic">Stok untuk barang ini kosong.</p>}
@@ -527,41 +559,41 @@ export default function App() {
         {/* HISTORY */}
         {activeMenu === "history" && (
           <div className="space-y-6">
-            <div className="flex justify-between items-end border-b border-slate-200 pb-4">
-              <h1 className="text-3xl font-black text-slate-800 tracking-tight">Riwayat Transaksi</h1>
-              <div className="flex gap-3 items-center">
-                <input type="date" className="border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:border-red-500 text-slate-600 font-medium" value={historyStartDate} onChange={e=>setHistoryStartDate(e.target.value)} />
-                <span className="text-slate-400 font-medium">sampai</span>
-                <input type="date" className="border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:border-red-500 text-slate-600 font-medium" value={historyEndDate} onChange={e=>setHistoryEndDate(e.target.value)} />
-                <button onClick={handleDownloadHistory} className="bg-green-600 hover:bg-green-700 transition-colors text-white px-5 py-2.5 rounded-lg flex items-center gap-2 font-bold shadow-md"><Download size={18}/> Export .xlsx</button>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-slate-200 pb-4 gap-4">
+              <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Riwayat Transaksi</h1>
+              <div className="flex flex-wrap gap-2 sm:gap-3 items-center w-full sm:w-auto">
+                <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyStartDate} onChange={e=>setHistoryStartDate(e.target.value)} />
+                <span className="text-slate-400 font-medium text-xs sm:text-sm">s.d</span>
+                <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyEndDate} onChange={e=>setHistoryEndDate(e.target.value)} />
+                <button onClick={handleDownloadHistory} className="bg-green-600 hover:bg-green-700 transition-colors text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 font-bold shadow-md w-full sm:w-auto text-sm"><Download size={18}/> Export .xlsx</button>
               </div>
             </div>
             
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <table className="w-full text-sm text-left">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
+              <table className="w-full text-sm text-left min-w-[700px]">
                 <thead className="bg-slate-50 text-slate-600">
                   <tr>
-                    <th className="p-4 font-bold">Tanggal & Waktu</th>
-                    <th className="p-4 font-bold text-center">Jenis Operasi</th>
-                    <th className="p-4 font-bold">Nama Barang Terlibat</th>
-                    <th className="p-4 font-bold text-center">Mutasi (Qty)</th>
-                    <th className="p-4 font-bold">Petugas</th>
+                    <th className="p-4 font-bold whitespace-nowrap">Tanggal & Waktu</th>
+                    <th className="p-4 font-bold text-center whitespace-nowrap">Jenis Operasi</th>
+                    <th className="p-4 font-bold whitespace-nowrap">Nama Barang Terlibat</th>
+                    <th className="p-4 font-bold text-center whitespace-nowrap">Mutasi (Qty)</th>
+                    <th className="p-4 font-bold whitespace-nowrap">Petugas</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {transactions.map(t => (
                     <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 text-slate-600 font-medium">{new Date(t.date).toLocaleString('id-ID')}</td>
+                      <td className="p-4 text-slate-600 font-medium whitespace-nowrap">{new Date(t.date).toLocaleString('id-ID')}</td>
                       <td className="p-4 text-center">
-                        <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
                           {t.type}
                         </span>
                       </td>
-                      <td className="p-4 font-bold text-slate-800">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
-                      <td className={`p-4 text-center font-black text-lg ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
+                      <td className="p-4 font-bold text-slate-800 min-w-[200px]">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
+                      <td className={`p-4 text-center font-black text-lg whitespace-nowrap ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
                         {t.type === 'OUTBOUND' ? '-' : '+'}{t.qtyChange}
                       </td>
-                      <td className="p-4 text-slate-600 capitalize font-medium">{t.operator}</td>
+                      <td className="p-4 text-slate-600 capitalize font-medium whitespace-nowrap">{t.operator}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -574,39 +606,36 @@ export default function App() {
         {/* SETTINGS */}
         {activeMenu === "settings" && hasAccess(["Super Admin"]) && (
           <div className="space-y-6">
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
             
-            {/* TAB MENU PENGATURAN */}
-            <div className="flex gap-6 border-b border-slate-200 overflow-x-auto">
-              <button onClick={()=>setActiveTabSettings('system')} className={`pb-3 text-sm font-bold transition-all whitespace-nowrap ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
-              <button onClick={()=>setActiveTabSettings('sku')} className={`pb-3 text-sm font-bold transition-all whitespace-nowrap ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
-              <button onClick={()=>setActiveTabSettings('users')} className={`pb-3 text-sm font-bold transition-all whitespace-nowrap ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
+            <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap pb-1">
+              <button onClick={()=>setActiveTabSettings('system')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
+              <button onClick={()=>setActiveTabSettings('sku')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
+              <button onClick={()=>setActiveTabSettings('users')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
             </div>
             
-            {/* SUB-MENU: PROFIL SISTEM */}
             {activeTabSettings === 'system' && (
-              <form onSubmit={handleUpdateConfig} className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-xl space-y-6">
+              <form onSubmit={handleUpdateConfig} className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200 max-w-xl space-y-6">
                 <div><label className="block font-bold text-slate-700 mb-2">Nama Aplikasi</label><input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.name} onChange={e=>setSystemConfig({...systemConfig, name: e.target.value})} /></div>
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">URL Logo (Opsional)</label>
                   <p className="text-xs text-slate-500 mb-3">Biarkan kosong jika ingin menggunakan ikon kotak default.</p>
                   <input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.logo || ""} onChange={e=>setSystemConfig({...systemConfig, logo: e.target.value})} placeholder="Contoh: /logo.png" />
                 </div>
-                <button className="bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Perubahan Sistem</button>
+                <button className="w-full sm:w-auto bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Perubahan Sistem</button>
               </form>
             )}
             
-            {/* SUB-MENU: DATABASE SKU */}
             {activeTabSettings === 'sku' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-                <form onSubmit={handleAddManualSku} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-start">
+                <form onSubmit={handleAddManualSku} className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
                   <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
                     <PlusCircle size={20} className="text-red-600"/>
                     <h3 className="font-black text-lg">Tambah SKU Manual</h3>
                   </div>
                   <div><label className="block text-sm font-bold mb-2 text-slate-700">Kode / ID Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.id} onChange={e=>setNewSku({...newSku, id: e.target.value})} required placeholder="Contoh: B-001" /></div>
                   <div><label className="block text-sm font-bold mb-2 text-slate-700">Nama Lengkap Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.name} onChange={e=>setNewSku({...newSku, name: e.target.value})} required placeholder="Contoh: Beras Medium..." /></div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-bold mb-2 text-slate-700">Tipe Kategori</label>
                       <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500 bg-white" value={newSku.type} onChange={e=>setNewSku({...newSku, type: e.target.value})}>
@@ -625,11 +654,11 @@ export default function App() {
                   <button type="submit" className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg hover:bg-slate-900 transition-colors shadow-md mt-2">Simpan SKU Baru</button>
                 </form>
 
-                <div className="bg-white p-8 h-full rounded-2xl shadow-sm text-center border-dashed border-2 border-slate-300 hover:border-green-500 transition-colors flex flex-col justify-center items-center">
+                <div className="bg-white p-6 sm:p-8 h-full rounded-2xl shadow-sm text-center border-dashed border-2 border-slate-300 hover:border-green-500 transition-colors flex flex-col justify-center items-center">
                   <FileSpreadsheet className="w-16 h-16 text-green-600 mb-4" />
                   <h3 className="font-black text-xl mb-2 text-slate-800">Upload Massal (.xlsx)</h3>
                   <p className="text-slate-500 mb-8 text-sm">Gunakan fitur ini jika ingin memasukkan puluhan atau ratusan data SKU sekaligus via Excel.</p>
-                  <label className="cursor-pointer bg-green-50 text-green-700 hover:bg-green-100 font-bold py-3 px-6 rounded-full transition-colors border border-green-200">
+                  <label className="cursor-pointer w-full sm:w-auto bg-green-50 text-green-700 hover:bg-green-100 font-bold py-3 px-6 rounded-xl sm:rounded-full transition-colors border border-green-200">
                     Pilih File Excel Anda
                     <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
                   </label>
@@ -637,10 +666,9 @@ export default function App() {
               </div>
             )}
 
-            {/* SUB-MENU: KELOLA PENGGUNA */}
             {activeTabSettings === 'users' && (
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
-                <form onSubmit={handleAddUser} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4 xl:col-span-1">
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 xl:gap-8 items-start">
+                <form onSubmit={handleAddUser} className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4 xl:col-span-1">
                   <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
                     <UserPlus size={20} className="text-blue-600"/>
                     <h3 className="font-black text-lg">Tambah Pengguna</h3>
@@ -659,17 +687,17 @@ export default function App() {
                   <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors shadow-md mt-2">Daftarkan Akun</button>
                 </form>
 
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden xl:col-span-2">
-                  <table className="w-full text-sm text-left">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full xl:col-span-2">
+                  <table className="w-full text-sm text-left min-w-[500px]">
                     <thead className="bg-slate-50 text-slate-600">
-                      <tr><th className="p-4 font-bold">Username</th><th className="p-4 font-bold">Role Akses</th><th className="p-4 font-bold text-center">Aksi</th></tr>
+                      <tr><th className="p-4 font-bold whitespace-nowrap">Username</th><th className="p-4 font-bold whitespace-nowrap">Role Akses</th><th className="p-4 font-bold text-center whitespace-nowrap">Aksi</th></tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {users.map(user => (
                         <tr key={user.username} className="hover:bg-slate-50 transition-colors">
                           <td className="p-4 font-bold text-slate-800">{user.username}</td>
                           <td className="p-4">
-                            <span className={`px-3 py-1 rounded-full text-xs font-bold border ${user.role === 'Viewer' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ${user.role === 'Viewer' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
                               {user.role}
                             </span>
                           </td>
