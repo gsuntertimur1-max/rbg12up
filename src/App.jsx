@@ -3,7 +3,7 @@ import {
   Package, Download, UserPlus, Trash2, Home, PackagePlus,
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
-  Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon
+  Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
@@ -77,7 +77,7 @@ const SearchableSelect = ({ options, value, onChange, placeholder }) => {
   return (
     <div ref={wrapperRef} className="relative w-full">
       <div
-        className="w-full border border-slate-300 rounded-lg p-2.5 text-sm cursor-pointer bg-white flex justify-between items-center"
+        className="w-full border border-slate-300 rounded-lg p-3 text-sm cursor-pointer bg-white flex justify-between items-center"
         onClick={() => setIsOpen(!isOpen)}
       >
         <span className={`truncate ${!value ? "text-slate-400" : "text-slate-800"}`}>
@@ -86,16 +86,16 @@ const SearchableSelect = ({ options, value, onChange, placeholder }) => {
         <span className="text-slate-400 text-xs ml-2">▼</span>
       </div>
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 flex flex-col">
+        <div className="absolute z-50 w-full mt-1 bg-white border rounded-lg shadow-xl max-h-60 flex flex-col">
           <div className="p-2 border-b sticky top-0 bg-white">
-            <input type="text" className="w-full px-2 py-1.5 text-sm border rounded-md outline-none" placeholder="Cari..." value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
+            <input type="text" className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md outline-none focus:border-red-500" placeholder="Ketik untuk mencari..." value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
           </div>
           <div className="overflow-y-auto">
             {filteredOptions.length === 0 ? (
               <div className="p-3 text-sm text-slate-500 text-center">Tidak ada hasil</div>
             ) : (
               filteredOptions.map(opt => (
-                <div key={opt.value} className="p-2.5 text-sm cursor-pointer hover:bg-slate-50 border-b last:border-0" onClick={() => { onChange(opt.value); setIsOpen(false); setSearch(""); }}>
+                <div key={opt.value} className="p-3 text-sm cursor-pointer hover:bg-red-50 hover:text-red-700 border-b border-slate-100 last:border-0 transition-colors" onClick={() => { onChange(opt.value); setIsOpen(false); setSearch(""); }}>
                   {opt.label}
                 </div>
               ))
@@ -123,11 +123,10 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [loginError, setLoginError] = useState("");
   const [activeMenu, setActiveMenu] = useState("dashboard");
-  const [activeTabSettings, setActiveTabSettings] = useState("users");
+  const [activeTabSettings, setActiveTabSettings] = useState("system");
   const [activeInvTab, setActiveInvTab] = useState("bulk");
   const [notification, setNotification] = useState(null);
   
-  const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
   const [fbUser, setFbUser] = useState(null);
   const [dbLoading, setDbLoading] = useState(true);
   const [activeOpTab, setActiveOpTab] = useState("inbound");
@@ -136,10 +135,13 @@ export default function App() {
 
   const initialFormData = {
     inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inSourceWarehouse: "",
-    rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "", bulkBatchId2: "", qtyToProcess2: "", outSkuId: ""
+    rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "", outSkuId: ""
   };
   const [formData, setFormData] = useState(initialFormData);
   const [outboundSelections, setOutboundSelections] = useState({});
+
+  // Form untuk Tambah SKU Manual
+  const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG" });
 
   useEffect(() => {
     if (!auth) return setDbLoading(false);
@@ -182,6 +184,7 @@ export default function App() {
 
   const handleLogout = () => { setCurrentUser(null); localStorage.removeItem("rebagging_session"); setActiveMenu("dashboard"); };
 
+  // FUNGSI TRANSAKSI
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
     const date = new Date().toISOString();
@@ -200,7 +203,7 @@ export default function App() {
       const targetSku = skus.find(s => s.id === formData.rebagTargetSkuId);
       const qty = parseFloat(formData.qtyToProcess) || 0;
       if (qty > b1.currentQty) return alert("Qty melebihi stok!");
-      const resultQty = Math.floor(qty / (targetSku.conversionRate || 1));
+      const resultQty = qty; // Asumsi 1:1 jika konversi tidak diset
       const newBatchId = `RBG-${Date.now()}`;
       batchData = { batchId: newBatchId, skuId: targetSku.id, currentQty: resultQty, sourceWarehouse: b1.sourceWarehouse, targetStack: formData.rebagTargetStack, date };
       txData = { id: `TRX-${Date.now()}`, date, type: "REBAGGING", skuId: targetSku.id, skuName: targetSku.name, qtyChange: resultQty, unit: targetSku.unit, operator: currentUser.username, targetStack: formData.rebagTargetStack };
@@ -225,8 +228,19 @@ export default function App() {
       for (const update of batchUpdates) await setDoc(doc(db, "artifacts", appId, "public", "data", "batches", update.id), update.data);
       if (txData) await setDoc(doc(db, "artifacts", appId, "public", "data", "transactions", txData.id), txData);
     }
-    showNotif("Transaksi Berhasil");
+    showNotif("Transaksi Berhasil Disimpan");
     setFormData(initialFormData); setOutboundSelections({});
+  };
+
+  // FUNGSI TAMBAH SKU MANUAL
+  const handleAddManualSku = async (e) => {
+    e.preventDefault();
+    if (!newSku.id || !newSku.name) return alert("ID dan Nama SKU wajib diisi!");
+    if (db) {
+      await setDoc(doc(db, "artifacts", appId, "public", "data", "skus", newSku.id.toString()), newSku);
+      showNotif(`SKU ${newSku.name} Berhasil Ditambahkan`);
+      setNewSku({ id: "", name: "", type: "bulk", unit: "KG" }); // Reset Form
+    }
   };
 
   // RECHARTS DATA
@@ -263,7 +277,7 @@ export default function App() {
           if(row.id) batch.set(doc(db, "artifacts", appId, "public", "data", "skus", row.id.toString()), row);
         });
         await batch.commit();
-        showNotif(`${data.length} SKU Diimpor`);
+        showNotif(`${data.length} SKU Berhasil Diimpor`);
       }
     };
     reader.readAsBinaryString(file);
@@ -276,19 +290,20 @@ export default function App() {
       filtered = filtered.filter(t => new Date(t.date) >= s && new Date(t.date) <= e);
     }
     const ws = XLSX.utils.json_to_sheet(filtered.map(t => ({
-      Tanggal: new Date(t.date).toLocaleString(), Tipe: t.type, SKU: t.skuName, Qty: t.qtyChange, Operator: t.operator
+      Tanggal: new Date(t.date).toLocaleString('id-ID'), Tipe: t.type, SKU: t.skuName, Qty: t.qtyChange, Operator: t.operator
     })));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Riwayat");
+    XLSX.utils.book_append_sheet(wb, ws, "Riwayat Transaksi");
     XLSX.writeFile(wb, "Riwayat_Rebagging.xlsx");
   };
 
   const handleUpdateConfig = async (e) => {
     e.preventDefault();
     if (db) await setDoc(doc(db, "artifacts", appId, "public", "data", "config", "system"), systemConfig);
-    showNotif("Sistem Diperbarui");
+    showNotif("Konfigurasi Sistem Diperbarui");
   };
 
+  // TAMPILAN LOGIN
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   if (!currentUser) return (
     <div className="min-h-screen flex items-center justify-center bg-red-600 p-4">
@@ -305,26 +320,26 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
-      {notification && <div className="fixed top-4 right-4 bg-green-600 text-white px-4 py-2 rounded shadow-lg z-50 animate-bounce">{notification}</div>}
+    <div className="min-h-screen bg-slate-50 flex font-sans">
+      {notification && <div className="fixed top-4 right-4 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl z-50 font-semibold animate-bounce flex items-center gap-2"><CheckCircle size={18}/> {notification}</div>}
       
       {/* SIDEBAR */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col">
-        <div className="p-4 border-b border-slate-700 font-bold flex items-center gap-2">
-          {systemConfig.logo ? <img src={systemConfig.logo} alt="logo" className="w-8 h-8 rounded bg-white" /> : <Package />}
+        <div className="p-5 border-b border-slate-800 font-bold flex items-center gap-3">
+          {systemConfig.logo ? <img src={systemConfig.logo} alt="logo" className="w-8 h-8 rounded bg-white object-contain" /> : <Package />}
           <span className="truncate">{systemConfig.name}</span>
         </div>
-        <nav className="p-4 flex-1 space-y-2 text-sm">
-          <button onClick={()=>setActiveMenu("dashboard")} className={`w-full flex items-center gap-2 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md":"hover:bg-slate-800"}`}><Home size={18}/> Dashboard</button>
-          <button onClick={()=>setActiveMenu("inventory")} className={`w-full flex items-center gap-2 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md":"hover:bg-slate-800"}`}><Boxes size={18}/> Inventori</button>
-          {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>setActiveMenu("operations")} className={`w-full flex items-center gap-2 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md":"hover:bg-slate-800"}`}><PackagePlus size={18}/> Operasi</button>}
-          <button onClick={()=>setActiveMenu("history")} className={`w-full flex items-center gap-2 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md":"hover:bg-slate-800"}`}><History size={18}/> Riwayat</button>
-          {hasAccess(["Super Admin"]) && <button onClick={()=>setActiveMenu("settings")} className={`w-full flex items-center gap-2 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md":"hover:bg-slate-800"}`}><Settings size={18}/> Pengaturan</button>}
+        <nav className="p-4 flex-1 space-y-1.5 text-sm">
+          <button onClick={()=>setActiveMenu("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
+          <button onClick={()=>setActiveMenu("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
+          {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>setActiveMenu("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
+          <button onClick={()=>setActiveMenu("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
+          {hasAccess(["Super Admin"]) && <button onClick={()=>setActiveMenu("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
         </nav>
-        <button onClick={handleLogout} className="m-4 p-3 bg-slate-800 hover:bg-red-600 transition-colors rounded-lg flex justify-center"><LogOut size={18}/></button>
+        <button onClick={handleLogout} className="m-4 p-3 bg-slate-800 hover:bg-red-600 transition-colors rounded-lg flex justify-center text-slate-300 hover:text-white"><LogOut size={18}/></button>
       </aside>
 
-      {/* CONTENT */}
+      {/* CONTENT UTAMA */}
       <main className="flex-1 p-8 overflow-y-auto">
         
         {/* DASHBOARD */}
@@ -347,7 +362,7 @@ export default function App() {
                 </ResponsiveContainer>
               </div>
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <h3 className="font-bold mb-4 text-slate-700">Komposisi SKU</h3>
+                <h3 className="font-bold mb-4 text-slate-700">Komposisi Master SKU</h3>
                 <ResponsiveContainer width="100%" height="85%">
                   <PieChart>
                     <Pie data={compositionData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} fill="#8884d8" dataKey="value" label paddingAngle={5}>
@@ -373,7 +388,7 @@ export default function App() {
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-50 text-slate-600">
-                  <tr><th className="p-4 font-semibold">ID SKU</th><th className="p-4 font-semibold">Nama Barang</th><th className="p-4 font-semibold">Gudang Asal</th><th className="p-4 font-semibold text-right">Total Stok</th></tr>
+                  <tr><th className="p-4 font-semibold">ID SKU</th><th className="p-4 font-semibold">Nama Barang</th><th className="p-4 font-semibold">Gudang Asal</th><th className="p-4 font-semibold text-right">Total Stok Aktif</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {skus.filter(s=>s.type===activeInvTab).map(sku => {
@@ -383,14 +398,15 @@ export default function App() {
                     return (
                       <tr key={sku.id} className="hover:bg-slate-50 transition-colors">
                         <td className="p-4 text-slate-500 font-mono">{sku.id}</td>
-                        <td className="p-4 font-medium text-slate-800">{sku.name}</td>
+                        <td className="p-4 font-semibold text-slate-800">{sku.name}</td>
                         <td className="p-4 text-slate-600">{sources}</td>
-                        <td className="p-4 text-right font-bold text-slate-800">{total} <span className="font-normal text-slate-500">{sku.unit}</span></td>
+                        <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
+              {skus.filter(s=>s.type===activeInvTab).length === 0 && <div className="p-8 text-center text-slate-400 italic">Belum ada data SKU di kategori ini.</div>}
             </div>
           </div>
         )}
@@ -398,71 +414,72 @@ export default function App() {
         {/* OPERATIONS */}
         {activeMenu === "operations" && (
           <div className="space-y-6">
-             <h1 className="text-3xl font-black text-slate-800 tracking-tight">Operasi Gudang</h1>
+             <h1 className="text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex gap-6 mb-8 border-b border-slate-200">
-                  <button onClick={()=>setActiveOpTab('inbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='inbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Inbound Masuk</button>
+                  <button onClick={()=>setActiveOpTab('inbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='inbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Inbound (Masuk)</button>
                   <button onClick={()=>setActiveOpTab('rebagging')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='rebagging'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Proses Rebagging</button>
-                  <button onClick={()=>setActiveOpTab('outbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='outbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Outbound Keluar</button>
+                  <button onClick={()=>setActiveOpTab('outbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='outbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Outbound (Keluar)</button>
                 </div>
                 <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-xl">
                   {/* INBOUND UI */}
                   {activeOpTab === 'inbound' && (
                     <>
-                      <div><label className="block text-sm font-semibold text-slate-700 mb-2">Pilih Bahan Baku</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:s.name}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU..." /></div>
-                      <div><label className="block text-sm font-semibold text-slate-700 mb-2">Jumlah (Qty)</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} required/></div>
-                      <div><label className="block text-sm font-semibold text-slate-700 mb-2">Asal Gudang</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} required/></div>
+                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
+                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} placeholder="Contoh: 5000" required/></div>
+                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
                     </>
                   )}
                   {/* REBAGGING UI */}
                   {activeOpTab === 'rebagging' && (
                     <>
-                      <div><label className="block text-sm font-semibold text-slate-700 mb-2">Bahan Baku Asal</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:s.name}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Sumber SKU..." /></div>
-                      {formData.bulkSkuId && <div><label className="block text-sm font-semibold text-slate-700 mb-2">Pilih Batch Spesifik</label><SearchableSelect options={inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && b.currentQty>0).map(b=>({value:b.batchId, label:`${b.sourceWarehouse} (Sisa: ${b.currentQty})`}))} value={formData.bulkBatchId} onChange={v=>setFormData({...formData, bulkBatchId:v})} placeholder="Pilih Batch yang akan direbagging..." /></div>}
-                      <div><label className="block text-sm font-semibold text-slate-700 mb-2">Kuantitas Diproses</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} /></div>
-                      <div><label className="block text-sm font-semibold text-slate-700 mb-2">Target Barang Jadi</label><SearchableSelect options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:s.name}))} value={formData.rebagTargetSkuId} onChange={v=>setFormData({...formData, rebagTargetSkuId:v})} placeholder="Pilih SKU Hasil Rebagging..." /></div>
-                      <div><label className="block text-sm font-semibold text-slate-700 mb-2">Lokasi Tumpukan Baru</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
+                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Asal (Sumber)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Bahan Baku..." /></div>
+                      {formData.bulkSkuId && <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch (Berdasarkan Gudang Asal)</label><SearchableSelect options={inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && b.currentQty>0).map(b=>({value:b.batchId, label:`${b.sourceWarehouse} (Sisa Stok: ${b.currentQty})`}))} value={formData.bulkBatchId} onChange={v=>setFormData({...formData, bulkBatchId:v})} placeholder="Pilih Batch yang akan direbagging..." /></div>}
+                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas yang Diproses</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
+                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Target Barang Jadi (Kemasan)</label><SearchableSelect options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.rebagTargetSkuId} onChange={v=>setFormData({...formData, rebagTargetSkuId:v})} placeholder="Pilih SKU Hasil Kemasan..." /></div>
+                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Lokasi Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
                     </>
                   )}
-                  {/* OUTBOUND UI (RESTORED!) */}
+                  {/* OUTBOUND UI */}
                   {activeOpTab === 'outbound' && (
                     <>
                       <div>
-                        <label className="block text-sm font-semibold text-slate-700 mb-2">Pilih SKU Untuk Dikeluarkan</label>
-                        <SearchableSelect options={skus.map(s=>({value:s.id, label:s.name}))} value={formData.outSkuId} onChange={v=>setFormData({...formData, outSkuId:v})} placeholder="Cari SKU..." />
+                        <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Barang yang akan Dikeluarkan</label>
+                        <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={v=>setFormData({...formData, outSkuId:v})} placeholder="Cari SKU..." />
                       </div>
                       {formData.outSkuId && (
-                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mt-4 space-y-3">
-                          <h4 className="font-bold text-sm text-slate-700 mb-3">Tentukan Kuantitas Keluar per Batch:</h4>
+                        <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
+                          <h4 className="font-bold text-sm text-slate-700 mb-2 border-b pb-2">Tentukan jumlah keluar dari masing-masing gudang asal:</h4>
                           {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).map(b => (
-                            <div key={b.batchId} className="flex justify-between items-center bg-white p-3 rounded border shadow-sm">
+                            <div key={b.batchId} className="flex justify-between items-center bg-white p-3 rounded-lg border shadow-sm">
                               <div>
-                                <p className="font-semibold text-slate-800 text-sm">{b.sourceWarehouse}</p>
-                                <p className="text-xs text-slate-500 font-mono">Sisa: {b.currentQty} unit</p>
+                                <p className="font-bold text-slate-800 text-sm">{b.sourceWarehouse}</p>
+                                <p className="text-xs text-slate-500 font-mono mt-1">Stok Tersedia: <span className="font-bold text-blue-600">{b.currentQty}</span></p>
                               </div>
-                              <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2 w-28 rounded-md text-center outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
+                              <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
                             </div>
                           ))}
+                          {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).length === 0 && <p className="text-sm text-red-500 italic">Stok untuk barang ini kosong.</p>}
                         </div>
                       )}
                     </>
                   )}
-                  <button className="w-full bg-red-600 text-white font-bold py-3 mt-4 rounded-lg hover:bg-red-700 transition-colors shadow-lg">Simpan Transaksi</button>
+                  <button className="w-full bg-red-600 text-white font-bold py-3.5 mt-6 rounded-lg hover:bg-red-700 transition-colors shadow-lg flex justify-center items-center gap-2"><CheckCircle size={20}/> Konfirmasi & Simpan Transaksi</button>
                 </form>
              </div>
           </div>
         )}
 
-        {/* HISTORY (RESTORED BEAUTIFUL TABLE!) */}
+        {/* HISTORY */}
         {activeMenu === "history" && (
           <div className="space-y-6">
             <div className="flex justify-between items-end border-b border-slate-200 pb-4">
               <h1 className="text-3xl font-black text-slate-800 tracking-tight">Riwayat Transaksi</h1>
               <div className="flex gap-3 items-center">
-                <input type="date" className="border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:border-red-500 text-slate-600" value={historyStartDate} onChange={e=>setHistoryStartDate(e.target.value)} />
-                <span className="text-slate-400">s/d</span>
-                <input type="date" className="border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:border-red-500 text-slate-600" value={historyEndDate} onChange={e=>setHistoryEndDate(e.target.value)} />
-                <button onClick={handleDownloadHistory} className="bg-green-600 hover:bg-green-700 transition-colors text-white px-5 py-2.5 rounded-lg flex items-center gap-2 font-semibold shadow-md"><Download size={18}/> Ekspor Excel</button>
+                <input type="date" className="border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:border-red-500 text-slate-600 font-medium" value={historyStartDate} onChange={e=>setHistoryStartDate(e.target.value)} />
+                <span className="text-slate-400 font-medium">sampai</span>
+                <input type="date" className="border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:border-red-500 text-slate-600 font-medium" value={historyEndDate} onChange={e=>setHistoryEndDate(e.target.value)} />
+                <button onClick={handleDownloadHistory} className="bg-green-600 hover:bg-green-700 transition-colors text-white px-5 py-2.5 rounded-lg flex items-center gap-2 font-bold shadow-md"><Download size={18}/> Export .xlsx</button>
               </div>
             </div>
             
@@ -470,32 +487,32 @@ export default function App() {
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-50 text-slate-600">
                   <tr>
-                    <th className="p-4 font-semibold">Tanggal & Waktu</th>
-                    <th className="p-4 font-semibold">Tipe Operasi</th>
-                    <th className="p-4 font-semibold">Nama SKU / Barang</th>
-                    <th className="p-4 font-semibold text-center">Mutasi (Qty)</th>
-                    <th className="p-4 font-semibold">Operator</th>
+                    <th className="p-4 font-bold">Tanggal & Waktu</th>
+                    <th className="p-4 font-bold text-center">Jenis Operasi</th>
+                    <th className="p-4 font-bold">Nama Barang Terlibat</th>
+                    <th className="p-4 font-bold text-center">Mutasi (Qty)</th>
+                    <th className="p-4 font-bold">Petugas</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {transactions.map(t => (
                     <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 text-slate-600">{new Date(t.date).toLocaleString('id-ID')}</td>
-                      <td className="p-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                      <td className="p-4 text-slate-600 font-medium">{new Date(t.date).toLocaleString('id-ID')}</td>
+                      <td className="p-4 text-center">
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
                           {t.type}
                         </span>
                       </td>
-                      <td className="p-4 font-medium text-slate-800">{t.skuName}</td>
-                      <td className={`p-4 text-center font-bold text-base ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
+                      <td className="p-4 font-bold text-slate-800">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
+                      <td className={`p-4 text-center font-black text-lg ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
                         {t.type === 'OUTBOUND' ? '-' : '+'}{t.qtyChange}
                       </td>
-                      <td className="p-4 text-slate-600 capitalize">{t.operator}</td>
+                      <td className="p-4 text-slate-600 capitalize font-medium">{t.operator}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {transactions.length === 0 && <div className="text-center text-slate-400 p-8 italic">Belum ada riwayat transaksi.</div>}
+              {transactions.length === 0 && <div className="text-center text-slate-400 p-8 italic">Belum ada riwayat transaksi yang tercatat.</div>}
             </div>
           </div>
         )}
@@ -505,28 +522,63 @@ export default function App() {
           <div className="space-y-6">
             <h1 className="text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
             <div className="flex gap-6 border-b border-slate-200">
-              <button onClick={()=>setActiveTabSettings('system')} className={`pb-3 text-sm font-semibold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
-              <button onClick={()=>setActiveTabSettings('sku')} className={`pb-3 text-sm font-semibold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
+              <button onClick={()=>setActiveTabSettings('system')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
+              <button onClick={()=>setActiveTabSettings('sku')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
             </div>
             
             {activeTabSettings === 'system' && (
               <form onSubmit={handleUpdateConfig} className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-xl space-y-6">
                 <div><label className="block font-bold text-slate-700 mb-2">Nama Aplikasi</label><input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.name} onChange={e=>setSystemConfig({...systemConfig, name: e.target.value})} /></div>
                 <div>
-                  <label className="block font-bold text-slate-700 mb-2">URL Logo (Opsional)</label>
-                  <p className="text-xs text-slate-500 mb-2">Kosongkan jika ingin menggunakan logo kotak default.</p>
+                  <label className="block font-bold text-slate-700 mb-1">URL Logo (Opsional)</label>
+                  <p className="text-xs text-slate-500 mb-3">Biarkan kosong jika ingin menggunakan ikon kotak default.</p>
                   <input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.logo || ""} onChange={e=>setSystemConfig({...systemConfig, logo: e.target.value})} placeholder="https://..." />
                 </div>
-                <button className="bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Konfigurasi</button>
+                <button className="bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Perubahan Sistem</button>
               </form>
             )}
             
             {activeTabSettings === 'sku' && (
-              <div className="bg-white p-12 rounded-2xl shadow-sm text-center border-dashed border-2 border-slate-300 max-w-2xl mx-auto hover:border-red-500 transition-colors">
-                <FileSpreadsheet className="mx-auto w-16 h-16 text-green-600 mb-4" />
-                <h3 className="font-bold text-lg mb-2 text-slate-800">Upload Master Data SKU</h3>
-                <p className="text-slate-500 mb-6 text-sm">Pastikan format file Anda adalah .xlsx atau .xls</p>
-                <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="mx-auto block text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100 cursor-pointer" />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+                
+                {/* FORM INPUT MANUAL (KEMBALI HADIR) */}
+                <form onSubmit={handleAddManualSku} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
+                  <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
+                    <PlusCircle size={20} className="text-red-600"/>
+                    <h3 className="font-black text-lg">Tambah SKU Manual</h3>
+                  </div>
+                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Kode / ID Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.id} onChange={e=>setNewSku({...newSku, id: e.target.value})} required placeholder="Contoh: B-001" /></div>
+                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Nama Lengkap Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.name} onChange={e=>setNewSku({...newSku, name: e.target.value})} required placeholder="Contoh: Beras Medium..." /></div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold mb-2 text-slate-700">Tipe Kategori</label>
+                      <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500 bg-white" value={newSku.type} onChange={e=>setNewSku({...newSku, type: e.target.value})}>
+                        <option value="bulk">Bahan Baku (Curah)</option>
+                        <option value="rebagged">Barang Jadi (Kemasan)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold mb-2 text-slate-700">Satuan Hitung</label>
+                      <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500 bg-white" value={newSku.unit} onChange={e=>setNewSku({...newSku, unit: e.target.value})}>
+                        <option value="KG">Kilogram (KG)</option>
+                        <option value="Pack">Kemasan (Pack)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button type="submit" className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg hover:bg-slate-900 transition-colors shadow-md mt-2">Simpan SKU Baru</button>
+                </form>
+
+                {/* KOTAK UPLOAD EXCEL */}
+                <div className="bg-white p-8 h-full rounded-2xl shadow-sm text-center border-dashed border-2 border-slate-300 hover:border-green-500 transition-colors flex flex-col justify-center items-center">
+                  <FileSpreadsheet className="w-16 h-16 text-green-600 mb-4" />
+                  <h3 className="font-black text-xl mb-2 text-slate-800">Upload Massal (.xlsx)</h3>
+                  <p className="text-slate-500 mb-8 text-sm">Gunakan fitur ini jika ingin memasukkan puluhan atau ratusan data SKU sekaligus via Excel.</p>
+                  <label className="cursor-pointer bg-green-50 text-green-700 hover:bg-green-100 font-bold py-3 px-6 rounded-full transition-colors border border-green-200">
+                    Pilih File Excel Anda
+                    <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
+                  </label>
+                </div>
+                
               </div>
             )}
           </div>
