@@ -3,7 +3,7 @@ import {
   Package, Download, UserPlus, Trash2, Home, PackagePlus,
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
-  Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle
+  Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
@@ -141,8 +141,6 @@ export default function App() {
   const [outboundSelections, setOutboundSelections] = useState({});
 
   const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG" });
-  
-  // STATE UNTUK USER BARU (DIKEMBALIKAN)
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
 
   useEffect(() => {
@@ -175,13 +173,24 @@ export default function App() {
   }, [fbUser]);
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
+  
+  // Fungsi Cek Hak Akses
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
 
+  // Fungsi Login Normal
   const handleLogin = (e) => {
     e.preventDefault();
     const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
     if (user) { setCurrentUser(user); localStorage.setItem("rebagging_session", JSON.stringify(user)); setLoginError(""); }
     else setLoginError("Username/password salah!");
+  };
+
+  // Fungsi Login sebagai Tamu (View Only)
+  const handleGuestLogin = () => {
+    const guestUser = { username: "Tamu (View Only)", role: "Viewer" };
+    setCurrentUser(guestUser);
+    localStorage.setItem("rebagging_session", JSON.stringify(guestUser));
+    setLoginError("");
   };
 
   const handleLogout = () => { setCurrentUser(null); localStorage.removeItem("rebagging_session"); setActiveMenu("dashboard"); };
@@ -241,7 +250,6 @@ export default function App() {
     }
   };
 
-  // FUNGSI MANAJEMEN USER (DIKEMBALIKAN)
   const handleAddUser = async (e) => {
     e.preventDefault();
     if (!newUserForm.username || !newUserForm.password) return alert("Username dan password wajib diisi!");
@@ -318,6 +326,7 @@ export default function App() {
     showNotif("Konfigurasi Sistem Diperbarui");
   };
 
+  // TAMPILAN LOGIN 
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   if (!currentUser) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
@@ -331,11 +340,21 @@ export default function App() {
         </div>
 
         {loginError && <p className="text-red-500 text-sm mb-4 font-semibold text-center">{loginError}</p>}
-        <form onSubmit={handleLogin} className="space-y-5">
+        <form onSubmit={handleLogin} className="space-y-4">
           <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
           <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all" type="password" placeholder="Password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm, password: e.target.value})} />
-          <button className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-colors shadow-lg mt-2">Login ke Sistem</button>
+          <button type="submit" className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-colors shadow-lg mt-2">Login ke Sistem</button>
         </form>
+        
+        {/* TOMBOL GUEST / VIEW ONLY */}
+        <div className="mt-6 flex items-center justify-center">
+          <div className="h-px bg-slate-200 w-full"></div>
+          <span className="px-4 text-sm text-slate-400 font-medium">ATAU</span>
+          <div className="h-px bg-slate-200 w-full"></div>
+        </div>
+        <button onClick={handleGuestLogin} type="button" className="w-full mt-6 bg-white text-slate-600 border-2 border-slate-200 font-bold py-3.5 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center justify-center gap-2">
+          <Eye size={18} className="text-slate-500"/> Masuk Tanpa Login (View Only)
+        </button>
       </div>
     </div>
   );
@@ -360,11 +379,18 @@ export default function App() {
         <nav className="p-4 flex-1 space-y-1.5 text-sm mt-2">
           <button onClick={()=>setActiveMenu("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
           <button onClick={()=>setActiveMenu("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
+          {/* BATASAN AKSES: Operasi dan Pengaturan disembunyikan dari Viewer */}
           {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>setActiveMenu("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
           <button onClick={()=>setActiveMenu("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
           {hasAccess(["Super Admin"]) && <button onClick={()=>setActiveMenu("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
         </nav>
-        <button onClick={handleLogout} className="m-4 p-3 bg-slate-800 hover:bg-red-600 transition-colors rounded-lg flex justify-center text-slate-300 hover:text-white"><LogOut size={18}/></button>
+        
+        {/* INFO USER AKTIF DI SIDEBAR */}
+        <div className="px-4 py-3 bg-slate-800 mx-4 rounded-lg mb-2 text-center text-xs">
+          <p className="text-slate-400">Login sebagai:</p>
+          <p className="font-bold text-white truncate">{currentUser.username}</p>
+        </div>
+        <button onClick={handleLogout} className="mx-4 mb-4 p-3 bg-slate-800 hover:bg-red-600 transition-colors rounded-lg flex justify-center items-center gap-2 text-slate-300 hover:text-white font-bold"><LogOut size={16}/> Keluar</button>
       </aside>
 
       {/* CONTENT UTAMA */}
@@ -440,7 +466,7 @@ export default function App() {
         )}
 
         {/* OPERATIONS */}
-        {activeMenu === "operations" && (
+        {activeMenu === "operations" && hasAccess(["Super Admin", "Admin", "Operator"]) && (
           <div className="space-y-6">
              <h1 className="text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
@@ -551,10 +577,10 @@ export default function App() {
             <h1 className="text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
             
             {/* TAB MENU PENGATURAN */}
-            <div className="flex gap-6 border-b border-slate-200">
-              <button onClick={()=>setActiveTabSettings('system')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
-              <button onClick={()=>setActiveTabSettings('sku')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
-              <button onClick={()=>setActiveTabSettings('users')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
+            <div className="flex gap-6 border-b border-slate-200 overflow-x-auto">
+              <button onClick={()=>setActiveTabSettings('system')} className={`pb-3 text-sm font-bold transition-all whitespace-nowrap ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
+              <button onClick={()=>setActiveTabSettings('sku')} className={`pb-3 text-sm font-bold transition-all whitespace-nowrap ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
+              <button onClick={()=>setActiveTabSettings('users')} className={`pb-3 text-sm font-bold transition-all whitespace-nowrap ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
             </div>
             
             {/* SUB-MENU: PROFIL SISTEM */}
@@ -611,10 +637,10 @@ export default function App() {
               </div>
             )}
 
-            {/* SUB-MENU: KELOLA PENGGUNA (DIKEMBALIKAN) */}
+            {/* SUB-MENU: KELOLA PENGGUNA */}
             {activeTabSettings === 'users' && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-                <form onSubmit={handleAddUser} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4 md:col-span-1">
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
+                <form onSubmit={handleAddUser} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4 xl:col-span-1">
                   <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
                     <UserPlus size={20} className="text-blue-600"/>
                     <h3 className="font-black text-lg">Tambah Pengguna</h3>
@@ -627,12 +653,13 @@ export default function App() {
                       <option value="Super Admin">Super Admin</option>
                       <option value="Admin">Admin</option>
                       <option value="Operator">Operator</option>
+                      <option value="Viewer">View Only (Tamu)</option>
                     </select>
                   </div>
                   <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors shadow-md mt-2">Daftarkan Akun</button>
                 </form>
 
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden md:col-span-2">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden xl:col-span-2">
                   <table className="w-full text-sm text-left">
                     <thead className="bg-slate-50 text-slate-600">
                       <tr><th className="p-4 font-bold">Username</th><th className="p-4 font-bold">Role Akses</th><th className="p-4 font-bold text-center">Aksi</th></tr>
@@ -641,7 +668,11 @@ export default function App() {
                       {users.map(user => (
                         <tr key={user.username} className="hover:bg-slate-50 transition-colors">
                           <td className="p-4 font-bold text-slate-800">{user.username}</td>
-                          <td className="p-4"><span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold border border-slate-200">{user.role}</span></td>
+                          <td className="p-4">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold border ${user.role === 'Viewer' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                              {user.role}
+                            </span>
+                          </td>
                           <td className="p-4 text-center">
                             <button onClick={()=>handleDeleteUser(user.username)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Hapus User">
                               <Trash2 size={18} />
