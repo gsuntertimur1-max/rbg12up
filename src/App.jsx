@@ -134,7 +134,7 @@ export default function App() {
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
 
-  // STATE UNTUK MENU HP (MOBILE SIDEBAR)
+  // STATE UNTUK MENU HP
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const initialFormData = {
@@ -177,7 +177,6 @@ export default function App() {
   }, [fbUser]);
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
-  
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
 
   const handleLogin = (e) => {
@@ -196,7 +195,6 @@ export default function App() {
 
   const handleLogout = () => { setCurrentUser(null); localStorage.removeItem("rebagging_session"); setActiveMenu("dashboard"); };
 
-  // Fungsi navigasi yang menutup sidebar saat diklik di HP
   const handleNavClick = (menuName) => {
     setActiveMenu(menuName);
     setIsSidebarOpen(false);
@@ -275,15 +273,20 @@ export default function App() {
     }
   };
 
+  // PERBAIKAN GRAFIK BATANG: Memberi data default jika stok kosong
   const stockByWarehouseData = useMemo(() => {
     const data = {};
+    let hasData = false;
     inventoryBatches.filter(b => b.currentQty > 0).forEach(b => {
+      hasData = true;
       const sw = b.sourceWarehouse || "Unknown";
       if(!data[sw]) data[sw] = { name: sw, kg: 0, pack: 0 };
       const sku = skus.find(s => s.id === b.skuId);
       if (sku && sku.unit?.toUpperCase() === 'KG') data[sw].kg += b.currentQty;
       else data[sw].pack += b.currentQty;
     });
+    
+    if (!hasData) return [{ name: 'Belum Ada Data', kg: 0, pack: 0 }];
     return Object.values(data);
   }, [inventoryBatches, skus]);
 
@@ -333,19 +336,17 @@ export default function App() {
     showNotif("Konfigurasi Sistem Diperbarui");
   };
 
-  // TAMPILAN LOGIN 
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
+  
   if (!currentUser) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
       <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-xl border border-slate-200 w-full max-w-md">
-        
         <div className="flex flex-col items-center justify-center mb-8">
           {systemConfig.logo && (
             <img src={systemConfig.logo} alt="Logo" className="w-40 sm:w-48 h-auto mb-4 object-contain" />
           )}
           <h1 className="text-xl sm:text-2xl font-black text-center text-slate-800">{systemConfig.name}</h1>
         </div>
-
         {loginError && <p className="text-red-500 text-sm mb-4 font-semibold text-center">{loginError}</p>}
         <form onSubmit={handleLogin} className="space-y-4">
           <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all text-sm sm:text-base" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
@@ -386,25 +387,27 @@ export default function App() {
         </button>
       </div>
 
-      {/* OVERLAY GELAP UNTUK MOBILE (Jika Menu Terbuka) */}
+      {/* OVERLAY GELAP UNTUK MOBILE */}
       {isSidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)}></div>
       )}
 
-      {/* SIDEBAR */}
-      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 h-full overflow-y-auto`}>
-        <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-4 text-center hidden md:flex">
+      {/* SIDEBAR DENGAN KOTAK LOGO YANG LEBIH ELEGAN */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 h-full overflow-y-auto shadow-2xl md:shadow-none`}>
+        
+        {/* LOGO DI DESKTOP */}
+        <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-5 text-center hidden md:flex mt-2">
           {systemConfig.logo ? (
-            <div className="bg-white p-3 rounded-xl w-full flex justify-center">
-               <img src={systemConfig.logo} alt="logo" className="w-32 h-auto object-contain" />
+            <div className="bg-white p-2.5 rounded-2xl w-10/12 flex justify-center shadow-lg hover:scale-105 transition-transform duration-300">
+               <img src={systemConfig.logo} alt="logo" className="h-12 w-auto object-contain" />
             </div>
           ) : (
             <Package size={36} />
           )}
-          <span className="font-bold text-lg leading-tight w-full break-words">{systemConfig.name}</span>
+          <span className="font-black text-lg leading-tight w-full break-words tracking-wide">{systemConfig.name}</span>
         </div>
         
-        {/* LOGO DI MOBILE SIDEBAR HEADER */}
+        {/* LOGO DI MOBILE SIDEBAR */}
         <div className="md:hidden p-4 border-b border-slate-800 flex justify-between items-center">
            <span className="font-black text-lg tracking-wider text-slate-300">MENU UTAMA</span>
            <button onClick={() => setIsSidebarOpen(false)} className="text-slate-400 hover:text-white"><X size={24}/></button>
@@ -413,308 +416,318 @@ export default function App() {
         <nav className="p-4 flex-1 space-y-1.5 text-sm mt-2">
           <button onClick={()=>handleNavClick("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
           <button onClick={()=>handleNavClick("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
-          
           {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
-          
           <button onClick={()=>handleNavClick("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
-          
           {hasAccess(["Super Admin"]) && <button onClick={()=>handleNavClick("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
         </nav>
         
-        <div className="px-4 py-3 bg-slate-800 mx-4 rounded-lg mb-2 text-center text-xs">
+        <div className="px-4 py-3 bg-slate-800 mx-4 rounded-lg mb-2 text-center text-xs border border-slate-700">
           <p className="text-slate-400">Login sebagai:</p>
           <p className="font-bold text-white truncate">{currentUser.username}</p>
         </div>
         <button onClick={handleLogout} className="mx-4 mb-4 p-3 bg-slate-800 hover:bg-red-600 transition-colors rounded-lg flex justify-center items-center gap-2 text-slate-300 hover:text-white font-bold"><LogOut size={16}/> Keluar</button>
       </aside>
 
-      {/* CONTENT UTAMA */}
-      <main className="flex-1 p-4 sm:p-8 overflow-y-auto w-full max-w-full">
-        
-        {/* DASHBOARD */}
-        {activeMenu === "dashboard" && (
-          <div className="space-y-6">
-            <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Dashboard Statistik</h1>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 h-80 sm:h-96">
-                <h3 className="font-bold mb-4 text-slate-700">Stok Berdasarkan Gudang Asal</h3>
-                <ResponsiveContainer width="100%" height="85%">
-                  <BarChart data={stockByWarehouseData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false}/>
-                    <XAxis dataKey="name" axisLine={false} tickLine={false}/>
-                    <YAxis axisLine={false} tickLine={false}/>
-                    <Tooltip cursor={{fill: 'transparent'}} contentStyle={{borderRadius: '8px'}}/>
-                    <Legend iconType="circle"/>
-                    <Bar dataKey="kg" fill="#ef4444" name="Kilogram (KG)" maxBarSize={60} radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="pack" fill="#3b82f6" name="Pack" maxBarSize={60} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 h-80 sm:h-96">
-                <h3 className="font-bold mb-4 text-slate-700">Komposisi Master SKU</h3>
-                <ResponsiveContainer width="100%" height="85%">
-                  <PieChart>
-                    <Pie data={compositionData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} fill="#8884d8" dataKey="value" label paddingAngle={5}>
-                      <Cell fill="#ef4444"/><Cell fill="#3b82f6"/>
-                    </Pie>
-                    <Tooltip contentStyle={{borderRadius: '8px'}}/>
-                    <Legend iconType="circle"/>
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* INVENTORY */}
-        {activeMenu === "inventory" && (
-          <div className="space-y-6">
-            <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Inventori Gudang</h1>
-            <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
-              <button onClick={()=>setActiveInvTab('bulk')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='bulk'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Bahan Baku (Curah)</button>
-              <button onClick={()=>setActiveInvTab('rebagged')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='rebagged'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Barang Jadi (Kemasan)</button>
-            </div>
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
-              <table className="w-full text-sm text-left min-w-[600px]">
-                <thead className="bg-slate-50 text-slate-600">
-                  <tr><th className="p-4 font-semibold whitespace-nowrap">ID SKU</th><th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th><th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th><th className="p-4 font-semibold text-right whitespace-nowrap">Total Stok Aktif</th></tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {skus.filter(s=>s.type===activeInvTab).map(sku => {
-                    const batches = inventoryBatches.filter(b=>b.skuId===sku.id && b.currentQty>0);
-                    const total = batches.reduce((acc, b) => acc+b.currentQty, 0);
-                    const sources = [...new Set(batches.map(b=>b.sourceWarehouse))].join(", ") || "-";
-                    return (
-                      <tr key={sku.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="p-4 text-slate-500 font-mono">{sku.id}</td>
-                        <td className="p-4 font-semibold text-slate-800">{sku.name}</td>
-                        <td className="p-4 text-slate-600">{sources}</td>
-                        <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-              {skus.filter(s=>s.type===activeInvTab).length === 0 && <div className="p-8 text-center text-slate-400 italic">Belum ada data SKU di kategori ini.</div>}
-            </div>
-          </div>
-        )}
-
-        {/* OPERATIONS */}
-        {activeMenu === "operations" && hasAccess(["Super Admin", "Admin", "Operator"]) && (
-          <div className="space-y-6">
-             <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
-             <div className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex gap-4 sm:gap-6 mb-8 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
-                  <button onClick={()=>setActiveOpTab('inbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='inbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Inbound (Masuk)</button>
-                  <button onClick={()=>setActiveOpTab('rebagging')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='rebagging'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Proses Rebagging</button>
-                  <button onClick={()=>setActiveOpTab('outbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='outbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Outbound (Keluar)</button>
+      {/* CONTENT UTAMA DENGAN BATAS LEBAR (max-w-7xl) AGAR TIDAK MELAR DI LAYAR LEBAR */}
+      <main className="flex-1 p-4 sm:p-8 overflow-y-auto w-full bg-slate-50">
+        <div className="max-w-7xl mx-auto">
+          
+          {/* DASHBOARD */}
+          {activeMenu === "dashboard" && (
+            <div className="space-y-6">
+              <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Dashboard Statistik</h1>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* GRAFIK BATANG YANG SUDAH DIPERBAIKI */}
+                <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-200 h-80 sm:h-96">
+                  <h3 className="font-bold mb-4 text-slate-700">Stok Berdasarkan Gudang Asal</h3>
+                  <ResponsiveContainer width="100%" height="85%">
+                    <BarChart data={stockByWarehouseData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}}/>
+                      <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}}/>
+                      <Tooltip cursor={{fill: '#f1f5f9'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}/>
+                      <Legend iconType="circle"/>
+                      <Bar dataKey="kg" fill="#ef4444" name="Kilogram (KG)" maxBarSize={60} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="pack" fill="#3b82f6" name="Pack" maxBarSize={60} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-                <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-xl">
-                  {activeOpTab === 'inbound' && (
-                    <>
-                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
-                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} placeholder="Contoh: 5000" required/></div>
-                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
-                    </>
-                  )}
-                  {activeOpTab === 'rebagging' && (
-                    <>
-                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Asal (Sumber)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Bahan Baku..." /></div>
-                      {formData.bulkSkuId && <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch (Berdasarkan Gudang Asal)</label><SearchableSelect options={inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && b.currentQty>0).map(b=>({value:b.batchId, label:`${b.sourceWarehouse} (Sisa Stok: ${b.currentQty})`}))} value={formData.bulkBatchId} onChange={v=>setFormData({...formData, bulkBatchId:v})} placeholder="Pilih Batch yang akan direbagging..." /></div>}
-                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas yang Diproses</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
-                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Target Barang Jadi (Kemasan)</label><SearchableSelect options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.rebagTargetSkuId} onChange={v=>setFormData({...formData, rebagTargetSkuId:v})} placeholder="Pilih SKU Hasil Kemasan..." /></div>
-                      <div><label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Lokasi Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
-                    </>
-                  )}
-                  {activeOpTab === 'outbound' && (
-                    <>
-                      <div>
-                        <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Barang yang akan Dikeluarkan</label>
-                        <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={v=>setFormData({...formData, outSkuId:v})} placeholder="Cari SKU..." />
-                      </div>
-                      {formData.outSkuId && (
-                        <div className="bg-slate-50 p-4 sm:p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
-                          <h4 className="font-bold text-sm text-slate-700 mb-2 border-b pb-2">Tentukan jumlah keluar dari masing-masing gudang asal:</h4>
-                          {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).map(b => (
-                            <div key={b.batchId} className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-3 rounded-lg border shadow-sm gap-3">
-                              <div>
-                                <p className="font-bold text-slate-800 text-sm">{b.sourceWarehouse}</p>
-                                <p className="text-xs text-slate-500 font-mono mt-1">Stok Tersedia: <span className="font-bold text-blue-600">{b.currentQty}</span></p>
-                              </div>
-                              <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-full sm:w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
-                            </div>
-                          ))}
-                          {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).length === 0 && <p className="text-sm text-red-500 italic">Stok untuk barang ini kosong.</p>}
-                        </div>
-                      )}
-                    </>
-                  )}
-                  <button className="w-full bg-red-600 text-white font-bold py-3.5 mt-6 rounded-lg hover:bg-red-700 transition-colors shadow-lg flex justify-center items-center gap-2"><CheckCircle size={20}/> Konfirmasi & Simpan Transaksi</button>
-                </form>
-             </div>
-          </div>
-        )}
 
-        {/* HISTORY */}
-        {activeMenu === "history" && (
-          <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-slate-200 pb-4 gap-4">
-              <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Riwayat Transaksi</h1>
-              <div className="flex flex-wrap gap-2 sm:gap-3 items-center w-full sm:w-auto">
-                <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyStartDate} onChange={e=>setHistoryStartDate(e.target.value)} />
-                <span className="text-slate-400 font-medium text-xs sm:text-sm">s.d</span>
-                <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyEndDate} onChange={e=>setHistoryEndDate(e.target.value)} />
-                <button onClick={handleDownloadHistory} className="bg-green-600 hover:bg-green-700 transition-colors text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 font-bold shadow-md w-full sm:w-auto text-sm"><Download size={18}/> Export .xlsx</button>
-              </div>
-            </div>
-            
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
-              <table className="w-full text-sm text-left min-w-[700px]">
-                <thead className="bg-slate-50 text-slate-600">
-                  <tr>
-                    <th className="p-4 font-bold whitespace-nowrap">Tanggal & Waktu</th>
-                    <th className="p-4 font-bold text-center whitespace-nowrap">Jenis Operasi</th>
-                    <th className="p-4 font-bold whitespace-nowrap">Nama Barang Terlibat</th>
-                    <th className="p-4 font-bold text-center whitespace-nowrap">Mutasi (Qty)</th>
-                    <th className="p-4 font-bold whitespace-nowrap">Petugas</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {transactions.map(t => (
-                    <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 text-slate-600 font-medium whitespace-nowrap">{new Date(t.date).toLocaleString('id-ID')}</td>
-                      <td className="p-4 text-center">
-                        <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
-                          {t.type}
-                        </span>
-                      </td>
-                      <td className="p-4 font-bold text-slate-800 min-w-[200px]">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
-                      <td className={`p-4 text-center font-black text-lg whitespace-nowrap ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
-                        {t.type === 'OUTBOUND' ? '-' : '+'}{t.qtyChange}
-                      </td>
-                      <td className="p-4 text-slate-600 capitalize font-medium whitespace-nowrap">{t.operator}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {transactions.length === 0 && <div className="text-center text-slate-400 p-8 italic">Belum ada riwayat transaksi yang tercatat.</div>}
-            </div>
-          </div>
-        )}
-
-        {/* SETTINGS */}
-        {activeMenu === "settings" && hasAccess(["Super Admin"]) && (
-          <div className="space-y-6">
-            <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
-            
-            <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap pb-1">
-              <button onClick={()=>setActiveTabSettings('system')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
-              <button onClick={()=>setActiveTabSettings('sku')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
-              <button onClick={()=>setActiveTabSettings('users')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
-            </div>
-            
-            {activeTabSettings === 'system' && (
-              <form onSubmit={handleUpdateConfig} className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200 max-w-xl space-y-6">
-                <div><label className="block font-bold text-slate-700 mb-2">Nama Aplikasi</label><input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.name} onChange={e=>setSystemConfig({...systemConfig, name: e.target.value})} /></div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">URL Logo (Opsional)</label>
-                  <p className="text-xs text-slate-500 mb-3">Biarkan kosong jika ingin menggunakan ikon kotak default.</p>
-                  <input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.logo || ""} onChange={e=>setSystemConfig({...systemConfig, logo: e.target.value})} placeholder="Contoh: /logo.png" />
-                </div>
-                <button className="w-full sm:w-auto bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Perubahan Sistem</button>
-              </form>
-            )}
-            
-            {activeTabSettings === 'sku' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-start">
-                <form onSubmit={handleAddManualSku} className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
-                  <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
-                    <PlusCircle size={20} className="text-red-600"/>
-                    <h3 className="font-black text-lg">Tambah SKU Manual</h3>
-                  </div>
-                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Kode / ID Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.id} onChange={e=>setNewSku({...newSku, id: e.target.value})} required placeholder="Contoh: B-001" /></div>
-                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Nama Lengkap Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.name} onChange={e=>setNewSku({...newSku, name: e.target.value})} required placeholder="Contoh: Beras Medium..." /></div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-bold mb-2 text-slate-700">Tipe Kategori</label>
-                      <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500 bg-white" value={newSku.type} onChange={e=>setNewSku({...newSku, type: e.target.value})}>
-                        <option value="bulk">Bahan Baku (Curah)</option>
-                        <option value="rebagged">Barang Jadi (Kemasan)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-bold mb-2 text-slate-700">Satuan Hitung</label>
-                      <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500 bg-white" value={newSku.unit} onChange={e=>setNewSku({...newSku, unit: e.target.value})}>
-                        <option value="KG">Kilogram (KG)</option>
-                        <option value="Pack">Kemasan (Pack)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <button type="submit" className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg hover:bg-slate-900 transition-colors shadow-md mt-2">Simpan SKU Baru</button>
-                </form>
-
-                <div className="bg-white p-6 sm:p-8 h-full rounded-2xl shadow-sm text-center border-dashed border-2 border-slate-300 hover:border-green-500 transition-colors flex flex-col justify-center items-center">
-                  <FileSpreadsheet className="w-16 h-16 text-green-600 mb-4" />
-                  <h3 className="font-black text-xl mb-2 text-slate-800">Upload Massal (.xlsx)</h3>
-                  <p className="text-slate-500 mb-8 text-sm">Gunakan fitur ini jika ingin memasukkan puluhan atau ratusan data SKU sekaligus via Excel.</p>
-                  <label className="cursor-pointer w-full sm:w-auto bg-green-50 text-green-700 hover:bg-green-100 font-bold py-3 px-6 rounded-xl sm:rounded-full transition-colors border border-green-200">
-                    Pilih File Excel Anda
-                    <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
-                  </label>
+                {/* GRAFIK LINGKARAN TANPA GARIS LABEL BERANTAKAN */}
+                <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-200 h-80 sm:h-96">
+                  <h3 className="font-bold mb-4 text-slate-700">Komposisi Master SKU</h3>
+                  <ResponsiveContainer width="100%" height="85%">
+                    <PieChart>
+                      <Pie 
+                        data={compositionData} 
+                        cx="50%" cy="50%" 
+                        innerRadius={60} outerRadius={100} 
+                        dataKey="value" 
+                        paddingAngle={5}
+                        stroke="none"
+                      >
+                        <Cell fill="#ef4444"/><Cell fill="#3b82f6"/>
+                      </Pie>
+                      <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}/>
+                      <Legend iconType="circle"/>
+                    </PieChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {activeTabSettings === 'users' && (
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 xl:gap-8 items-start">
-                <form onSubmit={handleAddUser} className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4 xl:col-span-1">
-                  <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
-                    <UserPlus size={20} className="text-blue-600"/>
-                    <h3 className="font-black text-lg">Tambah Pengguna</h3>
-                  </div>
-                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Username</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500" value={newUserForm.username} onChange={e=>setNewUserForm({...newUserForm, username: e.target.value})} required placeholder="Contoh: operator1" /></div>
-                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Password</label><input type="password" className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500" value={newUserForm.password} onChange={e=>setNewUserForm({...newUserForm, password: e.target.value})} required placeholder="***" /></div>
-                  <div>
-                    <label className="block text-sm font-bold mb-2 text-slate-700">Hak Akses (Role)</label>
-                    <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500 bg-white" value={newUserForm.role} onChange={e=>setNewUserForm({...newUserForm, role: e.target.value})}>
-                      <option value="Super Admin">Super Admin</option>
-                      <option value="Admin">Admin</option>
-                      <option value="Operator">Operator</option>
-                      <option value="Viewer">View Only (Tamu)</option>
-                    </select>
-                  </div>
-                  <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors shadow-md mt-2">Daftarkan Akun</button>
-                </form>
-
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full xl:col-span-2">
-                  <table className="w-full text-sm text-left min-w-[500px]">
-                    <thead className="bg-slate-50 text-slate-600">
-                      <tr><th className="p-4 font-bold whitespace-nowrap">Username</th><th className="p-4 font-bold whitespace-nowrap">Role Akses</th><th className="p-4 font-bold text-center whitespace-nowrap">Aksi</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {users.map(user => (
-                        <tr key={user.username} className="hover:bg-slate-50 transition-colors">
-                          <td className="p-4 font-bold text-slate-800">{user.username}</td>
-                          <td className="p-4">
-                            <span className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ${user.role === 'Viewer' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-                              {user.role}
-                            </span>
-                          </td>
-                          <td className="p-4 text-center">
-                            <button onClick={()=>handleDeleteUser(user.username)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Hapus User">
-                              <Trash2 size={18} />
-                            </button>
-                          </td>
+          {/* INVENTORY */}
+          {activeMenu === "inventory" && (
+            <div className="space-y-6">
+              <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Inventori Gudang</h1>
+              <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
+                <button onClick={()=>setActiveInvTab('bulk')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='bulk'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Bahan Baku (Curah)</button>
+                <button onClick={()=>setActiveInvTab('rebagged')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='rebagged'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Barang Jadi (Kemasan)</button>
+              </div>
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
+                <table className="w-full text-sm text-left min-w-[600px]">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr><th className="p-4 font-semibold whitespace-nowrap">ID SKU</th><th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th><th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th><th className="p-4 font-semibold text-right whitespace-nowrap">Total Stok Aktif</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {skus.filter(s=>s.type===activeInvTab).map(sku => {
+                      const batches = inventoryBatches.filter(b=>b.skuId===sku.id && b.currentQty>0);
+                      const total = batches.reduce((acc, b) => acc+b.currentQty, 0);
+                      const sources = [...new Set(batches.map(b=>b.sourceWarehouse))].join(", ") || "-";
+                      return (
+                        <tr key={sku.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="p-4 text-slate-500 font-mono">{sku.id}</td>
+                          <td className="p-4 font-semibold text-slate-800">{sku.name}</td>
+                          <td className="p-4 text-slate-600">{sources}</td>
+                          <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                {skus.filter(s=>s.type===activeInvTab).length === 0 && <div className="p-8 text-center text-slate-400 italic">Belum ada data SKU di kategori ini.</div>}
+              </div>
+            </div>
+          )}
+
+          {/* OPERATIONS */}
+          {activeMenu === "operations" && hasAccess(["Super Admin", "Admin", "Operator"]) && (
+            <div className="space-y-6">
+               <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
+               <div className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200">
+                  <div className="flex gap-4 sm:gap-6 mb-8 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
+                    <button onClick={()=>setActiveOpTab('inbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='inbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Inbound (Masuk)</button>
+                    <button onClick={()=>setActiveOpTab('rebagging')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='rebagging'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Proses Rebagging</button>
+                    <button onClick={()=>setActiveOpTab('outbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='outbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Outbound (Keluar)</button>
+                  </div>
+                  <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-xl">
+                    {activeOpTab === 'inbound' && (
+                      <>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} placeholder="Contoh: 5000" required/></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
+                      </>
+                    )}
+                    {activeOpTab === 'rebagging' && (
+                      <>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Asal (Sumber)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Bahan Baku..." /></div>
+                        {formData.bulkSkuId && <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch (Berdasarkan Gudang Asal)</label><SearchableSelect options={inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && b.currentQty>0).map(b=>({value:b.batchId, label:`${b.sourceWarehouse} (Sisa Stok: ${b.currentQty})`}))} value={formData.bulkBatchId} onChange={v=>setFormData({...formData, bulkBatchId:v})} placeholder="Pilih Batch yang akan direbagging..." /></div>}
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas yang Diproses</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Target Barang Jadi (Kemasan)</label><SearchableSelect options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.rebagTargetSkuId} onChange={v=>setFormData({...formData, rebagTargetSkuId:v})} placeholder="Pilih SKU Hasil Kemasan..." /></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Lokasi Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
+                      </>
+                    )}
+                    {activeOpTab === 'outbound' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Barang yang akan Dikeluarkan</label>
+                          <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={v=>setFormData({...formData, outSkuId:v})} placeholder="Cari SKU..." />
+                        </div>
+                        {formData.outSkuId && (
+                          <div className="bg-slate-50 p-4 sm:p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
+                            <h4 className="font-bold text-sm text-slate-700 mb-2 border-b pb-2">Tentukan jumlah keluar dari masing-masing gudang asal:</h4>
+                            {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).map(b => (
+                              <div key={b.batchId} className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-3 rounded-lg border shadow-sm gap-3">
+                                <div>
+                                  <p className="font-bold text-slate-800 text-sm">{b.sourceWarehouse}</p>
+                                  <p className="text-xs text-slate-500 font-mono mt-1">Stok Tersedia: <span className="font-bold text-blue-600">{b.currentQty}</span></p>
+                                </div>
+                                <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-full sm:w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
+                              </div>
+                            ))}
+                            {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).length === 0 && <p className="text-sm text-red-500 italic">Stok untuk barang ini kosong.</p>}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <button className="w-full bg-red-600 text-white font-bold py-3.5 mt-6 rounded-lg hover:bg-red-700 transition-colors shadow-lg flex justify-center items-center gap-2"><CheckCircle size={20}/> Konfirmasi & Simpan Transaksi</button>
+                  </form>
+               </div>
+            </div>
+          )}
+
+          {/* HISTORY */}
+          {activeMenu === "history" && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-slate-200 pb-4 gap-4">
+                <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Riwayat Transaksi</h1>
+                <div className="flex flex-wrap gap-2 sm:gap-3 items-center w-full sm:w-auto">
+                  <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyStartDate} onChange={e=>setHistoryStartDate(e.target.value)} />
+                  <span className="text-slate-400 font-medium text-xs sm:text-sm">s.d</span>
+                  <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyEndDate} onChange={e=>setHistoryEndDate(e.target.value)} />
+                  <button onClick={handleDownloadHistory} className="bg-green-600 hover:bg-green-700 transition-colors text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 font-bold shadow-md w-full sm:w-auto text-sm"><Download size={18}/> Export .xlsx</button>
                 </div>
               </div>
-            )}
-          </div>
-        )}
+              
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
+                <table className="w-full text-sm text-left min-w-[700px]">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="p-4 font-bold whitespace-nowrap">Tanggal & Waktu</th>
+                      <th className="p-4 font-bold text-center whitespace-nowrap">Jenis Operasi</th>
+                      <th className="p-4 font-bold whitespace-nowrap">Nama Barang Terlibat</th>
+                      <th className="p-4 font-bold text-center whitespace-nowrap">Mutasi (Qty)</th>
+                      <th className="p-4 font-bold whitespace-nowrap">Petugas</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {transactions.map(t => (
+                      <tr key={t.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 text-slate-600 font-medium whitespace-nowrap">{new Date(t.date).toLocaleString('id-ID')}</td>
+                        <td className="p-4 text-center">
+                          <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                            {t.type}
+                          </span>
+                        </td>
+                        <td className="p-4 font-bold text-slate-800 min-w-[200px]">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
+                        <td className={`p-4 text-center font-black text-lg whitespace-nowrap ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
+                          {t.type === 'OUTBOUND' ? '-' : '+'}{t.qtyChange}
+                        </td>
+                        <td className="p-4 text-slate-600 capitalize font-medium whitespace-nowrap">{t.operator}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {transactions.length === 0 && <div className="text-center text-slate-400 p-8 italic">Belum ada riwayat transaksi yang tercatat.</div>}
+              </div>
+            </div>
+          )}
+
+          {/* SETTINGS */}
+          {activeMenu === "settings" && hasAccess(["Super Admin"]) && (
+            <div className="space-y-6">
+              <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
+              
+              <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap pb-1">
+                <button onClick={()=>setActiveTabSettings('system')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
+                <button onClick={()=>setActiveTabSettings('sku')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
+                <button onClick={()=>setActiveTabSettings('users')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
+              </div>
+              
+              {activeTabSettings === 'system' && (
+                <form onSubmit={handleUpdateConfig} className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200 max-w-xl space-y-6">
+                  <div><label className="block font-bold text-slate-700 mb-2">Nama Aplikasi</label><input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.name} onChange={e=>setSystemConfig({...systemConfig, name: e.target.value})} /></div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">URL Logo (Opsional)</label>
+                    <p className="text-xs text-slate-500 mb-3">Biarkan kosong jika ingin menggunakan ikon kotak default.</p>
+                    <input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.logo || ""} onChange={e=>setSystemConfig({...systemConfig, logo: e.target.value})} placeholder="Contoh: /logo.png" />
+                  </div>
+                  <button className="w-full sm:w-auto bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Perubahan Sistem</button>
+                </form>
+              )}
+              
+              {activeTabSettings === 'sku' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-start">
+                  <form onSubmit={handleAddManualSku} className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
+                    <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
+                      <PlusCircle size={20} className="text-red-600"/>
+                      <h3 className="font-black text-lg">Tambah SKU Manual</h3>
+                    </div>
+                    <div><label className="block text-sm font-bold mb-2 text-slate-700">Kode / ID Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.id} onChange={e=>setNewSku({...newSku, id: e.target.value})} required placeholder="Contoh: B-001" /></div>
+                    <div><label className="block text-sm font-bold mb-2 text-slate-700">Nama Lengkap Barang</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500" value={newSku.name} onChange={e=>setNewSku({...newSku, name: e.target.value})} required placeholder="Contoh: Beras Medium..." /></div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-bold mb-2 text-slate-700">Tipe Kategori</label>
+                        <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500 bg-white" value={newSku.type} onChange={e=>setNewSku({...newSku, type: e.target.value})}>
+                          <option value="bulk">Bahan Baku (Curah)</option>
+                          <option value="rebagged">Barang Jadi (Kemasan)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold mb-2 text-slate-700">Satuan Hitung</label>
+                        <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500 bg-white" value={newSku.unit} onChange={e=>setNewSku({...newSku, unit: e.target.value})}>
+                          <option value="KG">Kilogram (KG)</option>
+                          <option value="Pack">Kemasan (Pack)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <button type="submit" className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg hover:bg-slate-900 transition-colors shadow-md mt-2">Simpan SKU Baru</button>
+                  </form>
+
+                  <div className="bg-white p-6 sm:p-8 h-full rounded-2xl shadow-sm text-center border-dashed border-2 border-slate-300 hover:border-green-500 transition-colors flex flex-col justify-center items-center">
+                    <FileSpreadsheet className="w-16 h-16 text-green-600 mb-4" />
+                    <h3 className="font-black text-xl mb-2 text-slate-800">Upload Massal (.xlsx)</h3>
+                    <p className="text-slate-500 mb-8 text-sm">Gunakan fitur ini jika ingin memasukkan puluhan atau ratusan data SKU sekaligus via Excel.</p>
+                    <label className="cursor-pointer w-full sm:w-auto bg-green-50 text-green-700 hover:bg-green-100 font-bold py-3 px-6 rounded-xl sm:rounded-full transition-colors border border-green-200">
+                      Pilih File Excel Anda
+                      <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {activeTabSettings === 'users' && (
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 xl:gap-8 items-start">
+                  <form onSubmit={handleAddUser} className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4 xl:col-span-1">
+                    <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
+                      <UserPlus size={20} className="text-blue-600"/>
+                      <h3 className="font-black text-lg">Tambah Pengguna</h3>
+                    </div>
+                    <div><label className="block text-sm font-bold mb-2 text-slate-700">Username</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500" value={newUserForm.username} onChange={e=>setNewUserForm({...newUserForm, username: e.target.value})} required placeholder="Contoh: operator1" /></div>
+                    <div><label className="block text-sm font-bold mb-2 text-slate-700">Password</label><input type="password" className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500" value={newUserForm.password} onChange={e=>setNewUserForm({...newUserForm, password: e.target.value})} required placeholder="***" /></div>
+                    <div>
+                      <label className="block text-sm font-bold mb-2 text-slate-700">Hak Akses (Role)</label>
+                      <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500 bg-white" value={newUserForm.role} onChange={e=>setNewUserForm({...newUserForm, role: e.target.value})}>
+                        <option value="Super Admin">Super Admin</option>
+                        <option value="Admin">Admin</option>
+                        <option value="Operator">Operator</option>
+                        <option value="Viewer">View Only (Tamu)</option>
+                      </select>
+                    </div>
+                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors shadow-md mt-2">Daftarkan Akun</button>
+                  </form>
+
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full xl:col-span-2">
+                    <table className="w-full text-sm text-left min-w-[500px]">
+                      <thead className="bg-slate-50 text-slate-600">
+                        <tr><th className="p-4 font-bold whitespace-nowrap">Username</th><th className="p-4 font-bold whitespace-nowrap">Role Akses</th><th className="p-4 font-bold text-center whitespace-nowrap">Aksi</th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {users.map(user => (
+                          <tr key={user.username} className="hover:bg-slate-50 transition-colors">
+                            <td className="p-4 font-bold text-slate-800">{user.username}</td>
+                            <td className="p-4">
+                              <span className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ${user.role === 'Viewer' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                                {user.role}
+                              </span>
+                            </td>
+                            <td className="p-4 text-center">
+                              <button onClick={()=>handleDeleteUser(user.username)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Hapus User">
+                                <Trash2 size={18} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );
