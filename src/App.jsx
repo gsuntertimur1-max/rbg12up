@@ -141,6 +141,9 @@ export default function App() {
   const [outboundSelections, setOutboundSelections] = useState({});
 
   const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG" });
+  
+  // STATE UNTUK USER BARU (DIKEMBALIKAN)
+  const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
 
   useEffect(() => {
     if (!auth) return setDbLoading(false);
@@ -238,6 +241,25 @@ export default function App() {
     }
   };
 
+  // FUNGSI MANAJEMEN USER (DIKEMBALIKAN)
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    if (!newUserForm.username || !newUserForm.password) return alert("Username dan password wajib diisi!");
+    if (db) {
+      await setDoc(doc(db, "artifacts", appId, "public", "data", "users", newUserForm.username), newUserForm);
+      showNotif(`Pengguna ${newUserForm.username} berhasil ditambahkan`);
+      setNewUserForm({ username: "", password: "", role: "Operator" });
+    }
+  };
+
+  const handleDeleteUser = async (username) => {
+    if (username === currentUser.username) return alert("Anda tidak bisa menghapus akun Anda sendiri yang sedang aktif!");
+    if (window.confirm(`Yakin ingin menghapus pengguna '${username}'?`)) {
+      if (db) await deleteDoc(doc(db, "artifacts", appId, "public", "data", "users", username));
+      showNotif(`Pengguna ${username} telah dihapus`);
+    }
+  };
+
   const stockByWarehouseData = useMemo(() => {
     const data = {};
     inventoryBatches.filter(b => b.currentQty > 0).forEach(b => {
@@ -296,7 +318,6 @@ export default function App() {
     showNotif("Konfigurasi Sistem Diperbarui");
   };
 
-  // TAMPILAN LOGIN (Logo di atas tulisan)
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   if (!currentUser) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
@@ -323,7 +344,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex font-sans">
       {notification && <div className="fixed top-4 right-4 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl z-50 font-semibold animate-bounce flex items-center gap-2"><CheckCircle size={18}/> {notification}</div>}
       
-      {/* SIDEBAR (Logo di atas tulisan) */}
+      {/* SIDEBAR */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col">
         <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-4 text-center">
           {systemConfig.logo ? (
@@ -528,11 +549,15 @@ export default function App() {
         {activeMenu === "settings" && hasAccess(["Super Admin"]) && (
           <div className="space-y-6">
             <h1 className="text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
+            
+            {/* TAB MENU PENGATURAN */}
             <div className="flex gap-6 border-b border-slate-200">
               <button onClick={()=>setActiveTabSettings('system')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
               <button onClick={()=>setActiveTabSettings('sku')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
+              <button onClick={()=>setActiveTabSettings('users')} className={`pb-3 text-sm font-bold transition-all ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
             </div>
             
+            {/* SUB-MENU: PROFIL SISTEM */}
             {activeTabSettings === 'system' && (
               <form onSubmit={handleUpdateConfig} className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-xl space-y-6">
                 <div><label className="block font-bold text-slate-700 mb-2">Nama Aplikasi</label><input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.name} onChange={e=>setSystemConfig({...systemConfig, name: e.target.value})} /></div>
@@ -545,9 +570,9 @@ export default function App() {
               </form>
             )}
             
+            {/* SUB-MENU: DATABASE SKU */}
             {activeTabSettings === 'sku' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-                {/* FORM INPUT MANUAL */}
                 <form onSubmit={handleAddManualSku} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
                   <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
                     <PlusCircle size={20} className="text-red-600"/>
@@ -574,7 +599,6 @@ export default function App() {
                   <button type="submit" className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg hover:bg-slate-900 transition-colors shadow-md mt-2">Simpan SKU Baru</button>
                 </form>
 
-                {/* KOTAK UPLOAD EXCEL */}
                 <div className="bg-white p-8 h-full rounded-2xl shadow-sm text-center border-dashed border-2 border-slate-300 hover:border-green-500 transition-colors flex flex-col justify-center items-center">
                   <FileSpreadsheet className="w-16 h-16 text-green-600 mb-4" />
                   <h3 className="font-black text-xl mb-2 text-slate-800">Upload Massal (.xlsx)</h3>
@@ -583,6 +607,50 @@ export default function App() {
                     Pilih File Excel Anda
                     <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
                   </label>
+                </div>
+              </div>
+            )}
+
+            {/* SUB-MENU: KELOLA PENGGUNA (DIKEMBALIKAN) */}
+            {activeTabSettings === 'users' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
+                <form onSubmit={handleAddUser} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4 md:col-span-1">
+                  <div className="border-b border-slate-100 pb-3 mb-2 flex items-center gap-2 text-slate-800">
+                    <UserPlus size={20} className="text-blue-600"/>
+                    <h3 className="font-black text-lg">Tambah Pengguna</h3>
+                  </div>
+                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Username</label><input className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500" value={newUserForm.username} onChange={e=>setNewUserForm({...newUserForm, username: e.target.value})} required placeholder="Contoh: operator1" /></div>
+                  <div><label className="block text-sm font-bold mb-2 text-slate-700">Password</label><input type="password" className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500" value={newUserForm.password} onChange={e=>setNewUserForm({...newUserForm, password: e.target.value})} required placeholder="***" /></div>
+                  <div>
+                    <label className="block text-sm font-bold mb-2 text-slate-700">Hak Akses (Role)</label>
+                    <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500 bg-white" value={newUserForm.role} onChange={e=>setNewUserForm({...newUserForm, role: e.target.value})}>
+                      <option value="Super Admin">Super Admin</option>
+                      <option value="Admin">Admin</option>
+                      <option value="Operator">Operator</option>
+                    </select>
+                  </div>
+                  <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors shadow-md mt-2">Daftarkan Akun</button>
+                </form>
+
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden md:col-span-2">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr><th className="p-4 font-bold">Username</th><th className="p-4 font-bold">Role Akses</th><th className="p-4 font-bold text-center">Aksi</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {users.map(user => (
+                        <tr key={user.username} className="hover:bg-slate-50 transition-colors">
+                          <td className="p-4 font-bold text-slate-800">{user.username}</td>
+                          <td className="p-4"><span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold border border-slate-200">{user.role}</span></td>
+                          <td className="p-4 text-center">
+                            <button onClick={()=>handleDeleteUser(user.username)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Hapus User">
+                              <Trash2 size={18} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
