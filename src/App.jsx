@@ -352,6 +352,328 @@ async function generateRebaggingBatchPdf(tx) {
   pdf.save("Catatan_Proses_Rebagging_" + safeBatch + ".pdf");
 }
 
+function formatStockNumber(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  return n.toLocaleString("id-ID", { maximumFractionDigits: 2 });
+}
+
+async function generateRawMaterialStockCardPdf({ sku, batches, transactions }) {
+  const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const L = 12;
+  const R = 583;
+  const W = R - L;
+  const matchingBatchIds = new Set(batches.map((b) => b.batchId));
+
+  const inbound = transactions
+    .filter((t) => t.type === "INBOUND" && t.skuId === sku.id)
+    .map((t) => ({
+      kind: "IN",
+      date: t.date,
+      qty: Number(t.qtyChange) || 0,
+      moNumber: t.moNumber || "",
+      stack: t.stackNumber || "",
+    }));
+
+  const rebagOut = transactions
+    .filter(
+      (t) =>
+        t.type === "REBAGGING" &&
+        (t.sourceSkuId === sku.id || matchingBatchIds.has(t.sourceBatchId))
+    )
+    .map((t) => ({
+      kind: "OUT",
+      date: t.date,
+      qty: Number(t.sourceQty ?? t.qtyChange) || 0,
+      stack: t.sourceStack || "",
+    }));
+
+  const events = [...inbound, ...rebagOut].sort(
+    (a, b) => new Date(a.date) - new Date(b.date)
+  );
+
+  let balance = 0;
+  events.forEach((e) => {
+    balance += e.kind === "IN" ? e.qty : -e.qty;
+    e.balance = balance;
+  });
+
+  const currentStock = batches.reduce(
+    (sum, b) => sum + (Number(b.currentQty) || 0),
+    0
+  );
+  const firstInbound = inbound[0];
+  const moNumber =
+    inbound.find((x) => x.moNumber)?.moNumber ||
+    batches.find((b) => b.moNumber)?.moNumber ||
+    transactions.find(
+      (t) =>
+        t.type === "REBAGGING" &&
+        (t.sourceSkuId === sku.id || matchingBatchIds.has(t.sourceBatchId)) &&
+        t.moNumber
+    )?.moNumber ||
+    "";
+  const stackLocation =
+    [...new Set(batches.map((b) => b.stackNumber || b.targetStack).filter(Boolean))].join(", ");
+
+  const line = (x1, y1, x2, y2, width = 0.55) => {
+    pdf.setDrawColor(30);
+    pdf.setLineWidth(width);
+    pdf.line(x1, y1, x2, y2);
+  };
+  const box = (x, y, w, h) => {
+    pdf.setDrawColor(30);
+    pdf.setLineWidth(0.55);
+    pdf.rect(x, y, w, h);
+  };
+  const txt = (value, x, y, opts = {}) => {
+    const { size = 7.3, bold = false, align = "left", maxWidth = null } = opts;
+    pdf.setFont("helvetica", bold ? "bold" : "normal");
+    pdf.setFontSize(size);
+    pdf.setTextColor(0);
+    const str = String(value ?? "");
+    if (maxWidth) {
+      pdf.text(pdf.splitTextToSize(str, maxWidth), x, y, { align });
+    } else {
+      pdf.text(str, x, y, { align });
+    }
+  };
+
+  try {
+    const logo = await loadPdfLogo();
+    pdf.addImage(logo, "PNG", 18, 18, 125, 42);
+  } catch (error) {
+    console.warn("Logo kartu bahan baku gagal dimuat:", error);
+    txt("BULOG", 20, 48, { size: 24, bold: true });
+  }
+
+  box(L, 68, W, 112);
+  txt("KARTU PERSEDIAAN BAHAN BAKU", (L + R) / 2, 93, {
+    size: 17,
+    bold: true,
+    align: "center",
+  });
+  line(L, 103, R, 103);
+
+  const meta = [
+    ["Nama Produk", sku.name || ""],
+    ["Nomor MO", moNumber],
+    ["Tanggal Masuk Gudang", firstInbound ? formatPdfDate(firstInbound.date) : ""],
+    ["Jumlah Karung/Karton", currentStock ? formatStockNumber(currentStock) + " " + (sku.unit || "") : ""],
+    ["Lokasi Tumpukan", stackLocation],
+  ];
+  meta.forEach((row, i) => {
+    const y = 117 + i * 13;
+    txt(row[0], 18, y, { size: 7.4 });
+    txt(":", 130, y, { size: 7.4 });
+    txt(row[1], 138, y, { size: 7.4, bold: i === 0, maxWidth: 425 });
+  });
+
+  const tableTop = 194;
+  const headerMid = 218;
+  const headerBottom = 254;
+  const tableBottom = 707;
+  const xs = [L, 132, 210, 314, 407, 468, 528, R];
+
+  box(L, tableTop, W, tableBottom - tableTop);
+  xs.slice(1, -1).forEach((x) => line(x, tableTop, x, tableBottom));
+  line(L, headerMid, R, headerMid);
+  line(L, headerBottom, R, headerBottom);
+
+  txt("MASUK", (L + 314) / 2, 211, { size: 13, bold: true, align: "center" });
+  txt("KELUAR", (314 + 528) / 2, 211, { size: 13, bold: true, align: "center" });
+
+  const headers = [
+    ["Tanggal Masuk", (L + 132) / 2],
+    ["Jumlah (kg)", (132 + 210) / 2],
+    ["No. Tumpukan", (210 + 314) / 2],
+    ["Tanggal Keluar", (314 + 407) / 2],
+    ["Jumlah (kg)", (407 + 468) / 2],
+    ["Sisa", (468 + 528) / 2],
+    ["Paraf", (528 + R) / 2],
+  ];
+  headers.forEach(([label, x]) => txt(label, x, 237, { size: 7.3, bold: true, align: "center" }));
+
+  const maxRows = 19;
+  const rowH = 22.5;
+  events.slice(0, maxRows).forEach((event, i) => {
+    const top = headerBottom + i * rowH;
+    const y = top + 14.5;
+    if (i > 0) line(L, top, R, top, 0.3);
+    if (event.kind === "IN") {
+      txt(formatPdfDate(event.date), (L + 132) / 2, y, { align: "center" });
+      txt(formatStockNumber(event.qty), (132 + 210) / 2, y, { align: "center" });
+      txt(event.stack || "", (210 + 314) / 2, y, { align: "center" });
+    } else {
+      txt(formatPdfDate(event.date), (314 + 407) / 2, y, { align: "center" });
+      txt(formatStockNumber(event.qty), (407 + 468) / 2, y, { align: "center" });
+    }
+    txt(formatStockNumber(event.balance), (468 + 528) / 2, y, { align: "center" });
+  });
+
+  txt("Kepala GBB Sunter Timur I & II", 462, 746, { size: 7, align: "center" });
+  txt("IRSA MAULIAN NUGRAHA", 462, 805, { size: 7, bold: true, align: "center" });
+
+  const safeSku = String(sku.id || sku.name || "bahan-baku").replace(/[^a-z0-9-_]/gi, "_");
+  pdf.save("Kartu_Persediaan_Bahan_Baku_" + safeSku + ".pdf");
+}
+
+async function generateFinishedGoodsStockCardPdf({ sku, batches, transactions }) {
+  const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const pageW = 841.89;
+  const L = 12;
+  const R = pageW - 12;
+  const W = R - L;
+
+  const inbound = transactions
+    .filter((t) => t.type === "REBAGGING" && t.skuId === sku.id)
+    .map((t) => ({
+      kind: "IN",
+      date: t.productionDate || t.date,
+      batchId: t.batchId || "",
+      qty: Number(t.finishedQty ?? t.qtyChange) || 0,
+      stack: t.targetStack || "",
+    }));
+
+  const outbound = transactions
+    .filter((t) => t.type === "OUTBOUND" && t.skuId === sku.id)
+    .map((t) => ({
+      kind: "OUT",
+      date: t.date,
+      qty: Number(t.qtyChange) || 0,
+      soNumber: t.soNumber || "",
+      customer: t.customer || "",
+    }));
+
+  const events = [...inbound, ...outbound].sort(
+    (a, b) => new Date(a.date) - new Date(b.date)
+  );
+
+  let balance = 0;
+  events.forEach((e) => {
+    balance += e.kind === "IN" ? e.qty : -e.qty;
+    e.balance = balance;
+  });
+
+  const activeBatches = batches.filter((b) => (Number(b.currentQty) || 0) > 0);
+  const currentStock = activeBatches.reduce(
+    (sum, b) => sum + (Number(b.currentQty) || 0),
+    0
+  );
+  const batchIds = [...new Set(activeBatches.map((b) => b.batchId).filter(Boolean))];
+  const productionDates = [...new Set(activeBatches.map((b) => b.productionDate || b.date).filter(Boolean))];
+  const targetStacks = [...new Set(activeBatches.map((b) => b.targetStack).filter(Boolean))];
+
+  const line = (x1, y1, x2, y2, width = 0.55) => {
+    pdf.setDrawColor(30);
+    pdf.setLineWidth(width);
+    pdf.line(x1, y1, x2, y2);
+  };
+  const box = (x, y, w, h) => {
+    pdf.setDrawColor(30);
+    pdf.setLineWidth(0.55);
+    pdf.rect(x, y, w, h);
+  };
+  const txt = (value, x, y, opts = {}) => {
+    const { size = 7.2, bold = false, align = "left", maxWidth = null } = opts;
+    pdf.setFont("helvetica", bold ? "bold" : "normal");
+    pdf.setFontSize(size);
+    pdf.setTextColor(0);
+    const str = String(value ?? "");
+    if (maxWidth) {
+      pdf.text(pdf.splitTextToSize(str, maxWidth), x, y, { align });
+    } else {
+      pdf.text(str, x, y, { align });
+    }
+  };
+
+  try {
+    const logo = await loadPdfLogo();
+    pdf.addImage(logo, "PNG", 18, 13, 125, 38);
+  } catch (error) {
+    console.warn("Logo kartu produk jadi gagal dimuat:", error);
+    txt("BULOG", 20, 42, { size: 23, bold: true });
+  }
+
+  box(L, 58, W, 90);
+  txt("KARTU PERSEDIAAN PRODUK JADI", pageW / 2, 82, {
+    size: 17,
+    bold: true,
+    align: "center",
+  });
+  line(L, 91, R, 91);
+
+  const firstInbound = inbound[0];
+  const meta = [
+    ["Nama Produk", sku.name || ""],
+    ["Nomor Batch", batchIds.length === 1 ? batchIds[0] : batchIds.length > 1 ? "Lihat tabel masuk" : ""],
+    ["Tanggal Produksi", productionDates.length === 1 ? formatPdfDate(productionDates[0]) : productionDates.length > 1 ? "Lihat tabel masuk" : ""],
+    ["Tanggal Masuk Gudang", firstInbound ? formatPdfDate(firstInbound.date) : ""],
+    ["Jumlah Karung/Karton", currentStock ? formatStockNumber(currentStock) + " " + (sku.unit || "") : ""],
+    ["Lokasi Tumpukan", targetStacks.join(", ")],
+  ];
+  meta.forEach((row, i) => {
+    const y = 103 + i * 7.2;
+    txt(row[0], 18, y, { size: 6.1 });
+    txt(":", 100, y, { size: 6.1 });
+    txt(row[1], 108, y, { size: 6.1, bold: i === 0, maxWidth: 700 });
+  });
+
+  const tableTop = 155;
+  const headerMid = 178;
+  const headerBottom = 211;
+  const tableBottom = 500;
+  const xs = [L, 100, 205, 250, 323, 392, 505, 720, 766, 812, R];
+
+  box(L, tableTop, W, tableBottom - tableTop);
+  xs.slice(1, -1).forEach((x) => line(x, tableTop, x, tableBottom));
+  line(L, headerMid, R, headerMid);
+  line(L, headerBottom, R, headerBottom);
+
+  txt("MASUK", (L + 323) / 2, 171, { size: 12.5, bold: true, align: "center" });
+  txt("KELUAR", (323 + 812) / 2, 171, { size: 12.5, bold: true, align: "center" });
+
+  const headers = [
+    ["Tanggal Masuk", (L + 100) / 2],
+    ["No.Bets", (100 + 205) / 2],
+    ["Jumlah Masuk", (205 + 250) / 2],
+    ["No. Tumpukan", (250 + 323) / 2],
+    ["Tanggal Keluar", (323 + 392) / 2],
+    ["No. SO", (392 + 505) / 2],
+    ["Nama Pelanggan", (505 + 720) / 2],
+    ["Jumlah Keluar", (720 + 766) / 2],
+    ["Sisa", (766 + 812) / 2],
+    ["Paraf", (812 + R) / 2],
+  ];
+  headers.forEach(([label, x]) => txt(label, x, 198, { size: 6.6, bold: true, align: "center" }));
+
+  const maxRows = 13;
+  const rowH = 22;
+  events.slice(0, maxRows).forEach((event, i) => {
+    const top = headerBottom + i * rowH;
+    const y = top + 14.5;
+    if (i > 0) line(L, top, R, top, 0.3);
+    if (event.kind === "IN") {
+      txt(formatPdfDate(event.date), (L + 100) / 2, y, { align: "center", size: 6.5 });
+      txt(event.batchId, (100 + 205) / 2, y, { align: "center", size: 6.2 });
+      txt(formatStockNumber(event.qty), (205 + 250) / 2, y, { align: "center", size: 6.5 });
+      txt(event.stack, (250 + 323) / 2, y, { align: "center", size: 6.2 });
+    } else {
+      txt(formatPdfDate(event.date), (323 + 392) / 2, y, { align: "center", size: 6.5 });
+      txt(event.soNumber, (392 + 505) / 2, y, { align: "center", size: 6.2 });
+      txt(event.customer, 510, y, { size: 6.2, maxWidth: 205 });
+      txt(formatStockNumber(event.qty), (720 + 766) / 2, y, { align: "center", size: 6.5 });
+    }
+    txt(formatStockNumber(event.balance), (766 + 812) / 2, y, { align: "center", size: 6.5 });
+  });
+
+  txt("Kepala GBB Sunter Timur I & II", 770, 526, { size: 6.8, align: "center" });
+  txt("IRSA MAULIAN NUGRAHA", 770, 567, { size: 6.8, bold: true, align: "center" });
+
+  const safeSku = String(sku.id || sku.name || "produk-jadi").replace(/[^a-z0-9-_]/gi, "_");
+  pdf.save("Kartu_Persediaan_Produk_Jadi_" + safeSku + ".pdf");
+}
+
 // --- APLIKASI UTAMA ---
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
@@ -397,7 +719,7 @@ export default function App() {
   const initialFormData = {
     inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inSourceWarehouse: "",
     rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
-    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(), outSkuId: ""
+    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(), outSkuId: "", outSoNumber: "", outCustomer: ""
   };
   const [formData, setFormData] = useState(initialFormData);
   const [outboundSelections, setOutboundSelections] = useState({});
@@ -561,6 +883,7 @@ export default function App() {
           initialQty: qty,
           currentQty: qty,
           sourceWarehouse: formData.inSourceWarehouse.trim(),
+          moNumber: formData.inMoNumber?.trim() || "",
           date,
         };
         const txData = {
@@ -573,6 +896,7 @@ export default function App() {
           unit: sku.unit,
           operator: currentUser.username,
           sourceWarehouse: formData.inSourceWarehouse.trim(),
+          moNumber: formData.inMoNumber?.trim() || "",
           batchId,
         };
 
@@ -734,6 +1058,8 @@ export default function App() {
                 operator: currentUser.username,
                 batchId: item.batchId,
                 sourceWarehouse: liveBatch.sourceWarehouse || "",
+                soNumber: formData.outSoNumber?.trim() || "",
+                customer: formData.outCustomer?.trim() || "",
               }
             );
           });
@@ -849,6 +1175,28 @@ export default function App() {
     } catch (error) {
       console.error("PDF Rebagging Error:", error);
       alert(`Gagal membuat PDF rebagging: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
+    }
+  };
+
+  const handleDownloadInventoryCard = async (sku) => {
+    try {
+      const skuBatches = inventoryBatches.filter((b) => b.skuId === sku.id);
+      if (sku.type === "bulk") {
+        await generateRawMaterialStockCardPdf({
+          sku,
+          batches: skuBatches,
+          transactions,
+        });
+      } else {
+        await generateFinishedGoodsStockCardPdf({
+          sku,
+          batches: skuBatches,
+          transactions,
+        });
+      }
+    } catch (error) {
+      console.error("Inventory Card PDF Error:", error);
+      alert(`Gagal membuat kartu persediaan: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
     }
   };
 
@@ -1022,9 +1370,9 @@ export default function App() {
                 <button onClick={()=>setActiveInvTab('rebagged')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='rebagged'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Barang Jadi (Kemasan)</button>
               </div>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
-                <table className="w-full text-sm text-left min-w-[600px]">
+                <table className="w-full text-sm text-left min-w-[780px]">
                   <thead className="bg-slate-50 text-slate-600">
-                    <tr><th className="p-4 font-semibold whitespace-nowrap">ID SKU</th><th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th><th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th><th className="p-4 font-semibold text-right whitespace-nowrap">Total Stok Aktif</th></tr>
+                    <tr><th className="p-4 font-semibold whitespace-nowrap">ID SKU</th><th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th><th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th><th className="p-4 font-semibold text-right whitespace-nowrap">Total Stok Aktif</th><th className="p-4 font-semibold text-center whitespace-nowrap">Dokumen</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {skus.filter(s=>s.type===activeInvTab).map(sku => {
@@ -1037,6 +1385,17 @@ export default function App() {
                           <td className="p-4 font-semibold text-slate-800">{sku.name}</td>
                           <td className="p-4 text-slate-600">{sources}</td>
                           <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
+                          <td className="p-4 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadInventoryCard(sku)}
+                              className="inline-flex items-center justify-center gap-2 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 px-3 py-2 rounded-lg font-bold text-xs whitespace-nowrap"
+                              title={sku.type === "bulk" ? "Download Kartu Persediaan Bahan Baku" : "Download Kartu Persediaan Produk Jadi"}
+                            >
+                              <FileDown size={16}/>
+                              {sku.type === "bulk" ? "Kartu Bahan Baku" : "Kartu Produk Jadi"}
+                            </button>
+                          </td>
                         </tr>
                       )
                     })}
@@ -1062,6 +1421,7 @@ export default function App() {
                       <>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} placeholder="Contoh: 5000" required/></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. MO <span className="font-normal text-slate-400">(untuk kartu persediaan)</span></label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inMoNumber} onChange={e=>setFormData({...formData, inMoNumber:e.target.value})} placeholder="Contoh: MO/4381/05/2026/09001" /></div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
                       </>
                     )}
@@ -1090,6 +1450,16 @@ export default function App() {
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Barang yang akan Dikeluarkan</label>
                           <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={v=>setFormData({...formData, outSkuId:v})} placeholder="Cari SKU..." />
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">No. SO <span className="font-normal text-slate-400">(opsional)</span></label>
+                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.outSoNumber} onChange={e=>setFormData({...formData, outSoNumber:e.target.value})} placeholder="Nomor SO" />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Nama Pelanggan <span className="font-normal text-slate-400">(opsional)</span></label>
+                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.outCustomer} onChange={e=>setFormData({...formData, outCustomer:e.target.value})} placeholder="Nama pelanggan / tujuan" />
+                          </div>
                         </div>
                         {formData.outSkuId && (
                           <div className="bg-slate-50 p-4 sm:p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
