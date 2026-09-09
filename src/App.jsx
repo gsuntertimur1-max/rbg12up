@@ -1806,9 +1806,26 @@ export default function App() {
             const item = selections[index];
             const liveBatch = snap.data();
             const liveQty = Number(liveBatch.currentQty) || 0;
+            const liveGoodQty = Number(liveBatch.goodQty ?? liveQty);
+            const liveWeightPerPackKg =
+              Number(liveBatch.weightPerPackKg) || inferWeightPerPackKg(sku) || 0;
+            const outboundKg =
+              isFinishedGoods
+                ? item.qty * liveWeightPerPackKg
+                : (String(sku.unit || "").toUpperCase() === "KG" ? item.qty : 0);
+            const liveGoodKg =
+              Number(liveBatch.goodKg) || liveGoodQty * liveWeightPerPackKg;
             const txId = `TRX-${timestamp}-${index + 1}`;
 
-            transaction.update(refs[index], { currentQty: liveQty - item.qty });
+            transaction.update(refs[index], {
+              currentQty: liveQty - item.qty,
+              ...(isFinishedGoods
+                ? {
+                    goodQty: Math.max(0, liveGoodQty - item.qty),
+                    goodKg: Math.max(0, liveGoodKg - outboundKg),
+                  }
+                : {}),
+            });
             transaction.set(
               doc(db, "artifacts", appId, "public", "data", "transactions", txId),
               {
@@ -1819,6 +1836,8 @@ export default function App() {
                 skuName: sku.name,
                 qtyChange: item.qty,
                 unit: sku.unit,
+                weightPerPackKg: isFinishedGoods ? liveWeightPerPackKg : null,
+                netWeightKg: outboundKg,
                 operator: currentUser.username,
                 batchId: item.batchId,
                 sourceWarehouse: liveBatch.sourceWarehouse || "",
@@ -2176,6 +2195,204 @@ export default function App() {
     { name: 'Barang Jadi', value: skus.filter(s=>s.type==='rebagged').length }
   ];
 
+  const reportTransactions = useMemo(() => {
+    return transactions.filter((t) => {
+      const txDate = new Date(t.date);
+      if (Number.isNaN(txDate.getTime())) return false;
+
+      if (reportStartDate) {
+        const start = new Date(reportStartDate);
+        start.setHours(0, 0, 0, 0);
+        if (txDate < start) return false;
+      }
+
+      if (reportEndDate) {
+        const end = new Date(reportEndDate);
+        end.setHours(23, 59, 59, 999);
+        if (txDate > end) return false;
+      }
+
+      return true;
+    });
+  }, [transactions, reportStartDate, reportEndDate]);
+
+  const productionReportRows = useMemo(
+    () =>
+      reportTransactions
+        .filter((t) => t.type === "REBAGGING")
+        .map((t) => {
+          const sku = skus.find((s) => s.id === t.skuId);
+          const outputQty = Number(t.outputQty ?? t.processedQty ?? 0);
+          const weightPerPackKg =
+            Number(t.weightPerPackKg) || inferWeightPerPackKg(sku) || 0;
+          return {
+            ...t,
+            outputQty,
+            weightPerPackKg,
+            netWeightKg:
+              Number(t.netWeightKg) || outputQty * weightPerPackKg,
+            goodKg:
+              Number(t.goodKg) || Number(t.goodQty ?? t.qtyChange ?? 0) * weightPerPackKg,
+            processKg:
+              Number(t.processKg) || Number(t.processQty || 0) * weightPerPackKg,
+            damageKg:
+              Number(t.damageKg) || Number(t.damageQty || 0) * weightPerPackKg,
+          };
+        }),
+    [reportTransactions, skus]
+  );
+
+  const materialUsageReportRows = useMemo(() => {
+    const grouped = {};
+
+    productionReportRows.forEach((tx) => {
+      (Array.isArray(tx.materials) ? tx.materials : []).forEach((material) => {
+        const key = `${material.skuId || "UNKNOWN"}|${material.unit || ""}`;
+        if (!grouped[key]) {
+          grouped[key] = {
+            skuId: material.skuId || "",
+            skuName: material.skuName || material.skuId || "",
+            unit: material.unit || "",
+            usedQty: 0,
+            damageQty: 0,
+            totalQty: 0,
+          };
+        }
+
+        const damageQty = Number(material.damageQty || 0);
+        const totalQty = Number(material.totalQty ?? material.qty ?? 0);
+        const usedQty = Number(
+          material.usedQty ?? Math.max(0, totalQty - damageQty)
+        );
+
+        grouped[key].usedQty += usedQty;
+        grouped[key].damageQty += damageQty;
+        grouped[key].totalQty += totalQty;
+      });
+    });
+
+    return Object.values(grouped).sort((a, b) =>
+      String(a.skuName).localeCompare(String(b.skuName))
+    );
+  }, [productionReportRows]);
+
+  const materialDamageLedgerRows = useMemo(
+    () =>
+      reportTransactions
+        .filter((t) => t.type === "MATERIAL_DAMAGE")
+        .sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [reportTransactions]
+  );
+
+  const productionReportSummary = useMemo(
+    () =>
+      productionReportRows.reduce(
+        (acc, tx) => {
+          acc.outputPack += Number(tx.outputQty || 0);
+          acc.outputKg += Number(tx.netWeightKg || 0);
+          acc.goodPack += Number(tx.goodQty ?? tx.qtyChange ?? 0);
+          acc.goodKg += Number(tx.goodKg || 0);
+          acc.processPack += Number(tx.processQty || 0);
+          acc.processKg += Number(tx.processKg || 0);
+          acc.damagePack += Number(tx.damageQty || 0);
+          acc.damageKg += Number(tx.damageKg || 0);
+          return acc;
+        },
+        {
+          outputPack: 0,
+          outputKg: 0,
+          goodPack: 0,
+          goodKg: 0,
+          processPack: 0,
+          processKg: 0,
+          damagePack: 0,
+          damageKg: 0,
+        }
+      ),
+    [productionReportRows]
+  );
+
+  const traceabilityResults = useMemo(() => {
+    const query = String(traceTmQuery || "").trim().toUpperCase();
+    if (!query) return [];
+
+    return transactions
+      .filter(
+        (t) =>
+          t.type === "REBAGGING" &&
+          String(t.resultTmNumber || "").toUpperCase().includes(query)
+      )
+      .map((production) => ({
+        production,
+        outbound: transactions.filter(
+          (t) =>
+            t.type === "OUTBOUND" &&
+            String(t.resultTmNumber || "").trim().toUpperCase() ===
+              String(production.resultTmNumber || "").trim().toUpperCase()
+        ),
+        materialDamage: transactions.filter(
+          (t) =>
+            t.type === "MATERIAL_DAMAGE" &&
+            String(t.parentTransactionId || "") === production.id
+        ),
+      }));
+  }, [transactions, traceTmQuery]);
+
+  const handleDownloadProductionReport = () => {
+    const productionSheet = XLSX.utils.json_to_sheet(
+      productionReportRows.map((t) => ({
+        Tanggal: new Date(t.date).toLocaleString("id-ID"),
+        SKU: t.skuId,
+        Produk: t.skuName,
+        "TM Hasil": t.resultTmNumber || "",
+        "Versi Komposisi": t.recipeVersion || 1,
+        "Output Pack": t.outputQty,
+        "Berat/Pack (Kg)": t.weightPerPackKg,
+        "Output Kg": t.netWeightKg,
+        "GOOD Pack": t.goodQty ?? t.qtyChange ?? 0,
+        "GOOD Kg": t.goodKg,
+        "PROCESS Pack": t.processQty || 0,
+        "PROCESS Kg": t.processKg,
+        "DAMAGE Pack": t.damageQty || 0,
+        "DAMAGE Kg": t.damageKg,
+        Operator: t.operator,
+      }))
+    );
+
+    const materialSheet = XLSX.utils.json_to_sheet(
+      materialUsageReportRows.map((row) => ({
+        SKU: row.skuId,
+        Bahan: row.skuName,
+        "Dipakai Baik": row.usedQty,
+        Rusak: row.damageQty,
+        "Total Keluar": row.totalQty,
+        Satuan: row.unit,
+      }))
+    );
+
+    const damageSheet = XLSX.utils.json_to_sheet(
+      materialDamageLedgerRows.map((t) => ({
+        Tanggal: new Date(t.date).toLocaleString("id-ID"),
+        SKU: t.skuId,
+        Bahan: t.skuName,
+        Batch: t.batchId,
+        MO: t.moNumber || "",
+        "TM Bahan": t.tmNumber || "",
+        "TM Hasil": t.resultTmNumber || "",
+        "Qty Rusak": t.damageQty ?? t.qtyChange ?? 0,
+        Satuan: t.unit,
+        Penyebab: t.cause || "Kerusakan saat proses Rebagging",
+        Operator: t.operator,
+      }))
+    );
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, productionSheet, "Produksi");
+    XLSX.utils.book_append_sheet(wb, materialSheet, "Pemakaian Bahan");
+    XLSX.utils.book_append_sheet(wb, damageSheet, "Material Damage");
+    XLSX.writeFile(wb, "Laporan_Produksi_Rebagging.xlsx");
+  };
+
   const handleImportExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -2215,7 +2432,10 @@ export default function App() {
       "No. TM": t.tmNumber || "",
       "TM Bahan Sumber": Array.isArray(t.sourceTmNumbers) ? t.sourceTmNumbers.join(", ") : "",
       "TM Hasil": t.resultTmNumber || "",
+      "Versi Komposisi": t.recipeVersion || "",
       Qty: t.qtyChange,
+      "Berat Kg": t.netWeightKg ?? t.resolutionKg ?? "",
+      "Induk Rebagging": t.parentTransactionId || "",
       Operator: t.operator
     })));
     const wb = XLSX.utils.book_new();
