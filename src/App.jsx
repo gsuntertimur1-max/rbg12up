@@ -1079,7 +1079,9 @@ export default function App() {
 
     rebagRecipes.forEach((recipe) => {
       if (!Array.isArray(recipe.materials)) return;
-      const targetSku = skus.find((s) => s.id === recipe.targetSku);
+      const targetSku =
+        skus.find((s) => s.id === recipe.targetSku) ||
+        { id: recipe.targetSku || "", name: recipe.label || recipe.matchName || "" };
 
       let changed = false;
       const updatedMaterials = recipe.materials.map((item) => {
