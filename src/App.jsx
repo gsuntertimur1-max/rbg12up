@@ -4,7 +4,7 @@ import {
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
   Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye,
-  Menu, X, LogIn, UserRound, LockKeyhole, ClipboardList, ShieldAlert, Scale
+  Menu, X, LogIn, UserRound, LockKeyhole, ClipboardList, ShieldAlert
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
@@ -4273,202 +4273,6 @@ Masukkan alasan override Super Admin:`
     effectiveQcHistoryPage * HISTORY_PAGE_SIZE
   );
 
-  const primaryDashboardData = useMemo(() => {
-    const packagingWords = [
-      "KEMASAN",
-      "KARDUS",
-      "KARTON",
-      "PLASTIK",
-      "PACKAGING",
-      "LABEL",
-      "BENANG",
-      "ROLL",
-      "SHEET",
-    ];
-
-    const isPrimaryRawSku = (sku) => {
-      if (!sku || sku.type !== "bulk") return false;
-      const name = String(sku.name || "").toUpperCase();
-      const isRiceOrSugar = name.includes("BERAS") || name.includes("GULA");
-      const isPackaging = packagingWords.some((word) => name.includes(word));
-      return isRiceOrSugar && !isPackaging;
-    };
-
-    const getFinishedSourceWarehouses = (batch) => {
-      const materialWarehouses = Array.isArray(batch.materials)
-        ? batch.materials
-            .map((material) => material.sourceWarehouse)
-            .filter(Boolean)
-        : [];
-
-      const unique = [...new Set(materialWarehouses)].sort((a, b) =>
-        String(a).localeCompare(String(b))
-      );
-
-      if (unique.length > 0) return unique.join(", ");
-      return batch.sourceWarehouse || "-";
-    };
-
-    const rawGroups = {};
-    inventoryBatches.forEach((batch) => {
-      const sku = skus.find((item) => item.id === batch.skuId);
-      if (!isPrimaryRawSku(sku)) return;
-
-      const qty = Number(batch.currentQty || 0);
-      if (qty <= 0) return;
-
-      const mo = String(batch.moNumber || "-");
-      const warehouse = String(batch.sourceWarehouse || "-");
-      const key = `${mo}|${warehouse}|${sku.id}`;
-
-      if (!rawGroups[key]) {
-        rawGroups[key] = {
-          key,
-          mo,
-          warehouse,
-          skuId: sku.id,
-          name: sku.name,
-          unit: sku.unit || "KG",
-          qty: 0,
-          batchCount: 0,
-          qcStatuses: new Set(),
-        };
-      }
-
-      rawGroups[key].qty += qty;
-      rawGroups[key].batchCount += 1;
-      rawGroups[key].qcStatuses.add(getQcStatusLabel(batch));
-    });
-
-    const rawRows = Object.values(rawGroups)
-      .map((row) => ({
-        ...row,
-        qcStatus: [...row.qcStatuses].sort().join(", "),
-      }))
-      .sort((a, b) => {
-        const moCompare = a.mo.localeCompare(b.mo, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-        if (moCompare !== 0) return moCompare;
-
-        const warehouseCompare = a.warehouse.localeCompare(b.warehouse, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-        if (warehouseCompare !== 0) return warehouseCompare;
-
-        return a.name.localeCompare(b.name, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-      });
-
-    const finishedGroups = {};
-    inventoryBatches.forEach((batch) => {
-      const sku = skus.find((item) => item.id === batch.skuId);
-      if (!sku || sku.type !== "rebagged") return;
-
-      const good = Number(batch.currentQty || 0);
-      const process = Number(batch.processQty || 0);
-      const damage = Number(batch.damageQty || 0);
-      if (good <= 0 && process <= 0 && damage <= 0) return;
-
-      const mo = String(
-        batch.mainMoNumber || getPrimaryMoNumber(batch) || batch.moNumber || "-"
-      );
-      const warehouse = getFinishedSourceWarehouses(batch);
-      const targetStack = String(batch.targetStack || "-");
-      const key = `${mo}|${warehouse}|${targetStack}|${sku.id}`;
-
-      if (!finishedGroups[key]) {
-        finishedGroups[key] = {
-          key,
-          mo,
-          warehouse,
-          targetStack,
-          skuId: sku.id,
-          name: sku.name,
-          unit: sku.unit || "Pack",
-          good: 0,
-          process: 0,
-          damage: 0,
-          batchCount: 0,
-          tmResults: new Set(),
-          qcStatuses: new Set(),
-          netKg: 0,
-        };
-      }
-
-      const weight =
-        Number(batch.weightPerPackKg) || inferWeightPerPackKg(sku) || 0;
-
-      finishedGroups[key].good += good;
-      finishedGroups[key].process += process;
-      finishedGroups[key].damage += damage;
-      finishedGroups[key].batchCount += 1;
-      finishedGroups[key].netKg +=
-        (Number(batch.goodKg || 0) || good * weight) +
-        (Number(batch.processKg || 0) || process * weight) +
-        (Number(batch.damageKg || 0) || damage * weight);
-
-      if (batch.resultTmNumber) {
-        finishedGroups[key].tmResults.add(batch.resultTmNumber);
-      }
-      finishedGroups[key].qcStatuses.add(getQcStatusLabel(batch));
-    });
-
-    const finishedRows = Object.values(finishedGroups)
-      .map((row) => ({
-        ...row,
-        tmResult: [...row.tmResults].sort().join(", "),
-        qcStatus: [...row.qcStatuses].sort().join(", "),
-        total: row.good + row.process + row.damage,
-      }))
-      .sort((a, b) => {
-        const moCompare = a.mo.localeCompare(b.mo, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-        if (moCompare !== 0) return moCompare;
-
-        const warehouseCompare = a.warehouse.localeCompare(b.warehouse, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-        if (warehouseCompare !== 0) return warehouseCompare;
-
-        return a.name.localeCompare(b.name, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-      });
-
-    const rawKg = rawRows
-      .filter((row) => String(row.unit).toUpperCase() === "KG")
-      .reduce((sum, row) => sum + row.qty, 0);
-
-    const finishedGoodPack = finishedRows.reduce(
-      (sum, row) => sum + row.good,
-      0
-    );
-
-    const finishedNetKg = finishedRows.reduce(
-      (sum, row) => sum + row.netKg,
-      0
-    );
-
-    return {
-      rawRows,
-      finishedRows,
-      rawKg,
-      finishedGoodPack,
-      finishedNetKg,
-      rawMoCount: new Set(rawRows.map((row) => row.mo)).size,
-      finishedMoCount: new Set(finishedRows.map((row) => row.mo)).size,
-    };
-  }, [inventoryBatches, skus]);
-
   const reportTransactions = useMemo(() => {
     return transactions.filter((t) => {
       const txDate = new Date(t.date);
@@ -5403,204 +5207,249 @@ Masukkan alasan override Super Admin:`
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <div className="text-xs font-black uppercase tracking-[0.18em] text-red-500">
-                    Persediaan Utama
+                    Warehouse Overview
                   </div>
                   <h1 className="mt-1 text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                     Dashboard Persediaan
                   </h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                    Menampilkan hanya bahan baku utama berupa Beras/Gula dan seluruh produk jadi.
-                    Kemasan, plastik, kardus/karton, label, dan bahan pendukung tidak ditampilkan di dashboard.
+                    Ringkasan stok aktif, status produk jadi, QC, dan risiko kedaluwarsa.
+                    Kuantitas ditampilkan per satuan agar KG, Pack, PCS, dan Karton tidak tercampur.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={()=>handleNavClick("inventory")}
-                  className="self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-600 shadow-sm hover:bg-slate-50"
-                >
-                  Lihat Inventori Lengkap
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <div className="rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white p-5 shadow-sm">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-[10px] font-black uppercase tracking-[0.15em] text-blue-500">
-                        Bahan Baku Utama
-                      </div>
-                      <div className="mt-2 text-3xl font-black text-blue-900">
-                        {primaryDashboardData.rawKg.toLocaleString("id-ID", {maximumFractionDigits:2})}
-                      </div>
-                      <div className="mt-1 text-xs font-black text-blue-600">KG Beras / Gula</div>
-                    </div>
-                    <div className="rounded-2xl bg-blue-100 p-3 text-blue-700">
-                      <Database size={22}/>
-                    </div>
-                  </div>
-                  <div className="mt-4 text-xs font-bold text-slate-500">
-                    {primaryDashboardData.rawMoCount} MO aktif · {primaryDashboardData.rawRows.length} kelompok stok
-                  </div>
-                </div>
-
-                <div className="rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-5 shadow-sm">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-[10px] font-black uppercase tracking-[0.15em] text-emerald-500">
-                        Produk Jadi GOOD
-                      </div>
-                      <div className="mt-2 text-3xl font-black text-emerald-900">
-                        {primaryDashboardData.finishedGoodPack.toLocaleString("id-ID")}
-                      </div>
-                      <div className="mt-1 text-xs font-black text-emerald-600">Pack siap stok</div>
-                    </div>
-                    <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700">
-                      <Boxes size={22}/>
-                    </div>
-                  </div>
-                  <div className="mt-4 text-xs font-bold text-slate-500">
-                    {primaryDashboardData.finishedMoCount} MO · {primaryDashboardData.finishedRows.length} kelompok produk
-                  </div>
-                </div>
-
-                <div className="rounded-3xl border border-slate-200 bg-slate-900 p-5 text-white shadow-sm">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-[10px] font-black uppercase tracking-[0.15em] text-slate-400">
-                        Netto Produk Jadi
-                      </div>
-                      <div className="mt-2 text-3xl font-black">
-                        {primaryDashboardData.finishedNetKg.toLocaleString("id-ID", {maximumFractionDigits:2})}
-                      </div>
-                      <div className="mt-1 text-xs font-black text-slate-300">Kg ekuivalen</div>
-                    </div>
-                    <div className="rounded-2xl bg-white/10 p-3 text-white">
-                      <Scale size={22}/>
-                    </div>
-                  </div>
-                  <div className="mt-4 text-xs font-bold text-slate-400">
-                    GOOD + PROCESS + DAMAGE produk jadi
-                  </div>
+                <div className="inline-flex items-center gap-2 self-start rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 shadow-sm">
+                  <Database size={14}/>
+                  {dashboardSummary.activeBatchCount.toLocaleString("id-ID")} batch aktif
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                <div className="border-b border-slate-200 p-5">
-                  <div className="text-xs font-black uppercase tracking-[0.14em] text-blue-500">
-                    Bahan Baku Utama
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                <div className="xl:col-span-2 overflow-hidden rounded-3xl border border-slate-200 bg-slate-900 p-5 sm:p-6 text-white shadow-xl shadow-slate-200/60">
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+                        Total Persediaan Aktif
+                      </div>
+                      <h2 className="mt-2 text-2xl font-black">Stok Gudang Saat Ini</h2>
+                      <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">
+                        Bahan baku dan produk jadi dipisahkan berdasarkan satuan dan status agar saldo lebih mudah dibaca.
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-right">
+                      <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">SKU aktif</div>
+                      <div className="mt-1 text-2xl font-black">
+                        {dashboardSummary.skuRows.length.toLocaleString("id-ID")}
+                      </div>
+                    </div>
                   </div>
-                  <h2 className="mt-1 text-lg font-black text-slate-900">
-                    Persediaan Beras & Gula
-                  </h2>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Diurutkan berdasarkan MO, kemudian Gudang Asal.
-                  </p>
+
+                  <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Bahan Baku / Kemasan</div>
+                          <div className="mt-1 text-sm font-bold text-white">{dashboardSummary.rawBatchCount} batch aktif</div>
+                        </div>
+                        <Database size={22} className="text-blue-300"/>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {Object.entries(dashboardSummary.rawUnitTotals).length > 0 ? (
+                          Object.entries(dashboardSummary.rawUnitTotals).map(([unit,total])=>(
+                            <div key={unit} className="rounded-xl bg-white/10 px-3 py-2">
+                              <div className="text-lg font-black">{Number(total).toLocaleString("id-ID")}</div>
+                              <div className="text-[10px] font-black uppercase text-slate-400">{unit}</div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-sm text-slate-400">Belum ada stok bahan aktif.</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Produk Jadi</div>
+                          <div className="mt-1 text-sm font-bold text-white">{dashboardSummary.finishedBatchCount} batch aktif</div>
+                        </div>
+                        <Boxes size={22} className="text-emerald-300"/>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                        <div className="rounded-xl bg-emerald-400/10 px-3 py-2">
+                          <div className="text-lg font-black text-emerald-300">{dashboardSummary.totalFinishedPack.toLocaleString("id-ID")}</div>
+                          <div className="text-[10px] font-black uppercase text-slate-400">Pack total</div>
+                        </div>
+                        <div className="rounded-xl bg-blue-400/10 px-3 py-2">
+                          <div className="text-lg font-black text-blue-300">{dashboardSummary.totalFinishedKg.toLocaleString("id-ID", {maximumFractionDigits:2})}</div>
+                          <div className="text-[10px] font-black uppercase text-slate-400">Kg netto</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[900px] text-sm">
-                    <thead className="bg-slate-50 text-slate-500">
-                      <tr>
-                        <th className="p-3 text-left">MO</th>
-                        <th className="p-3 text-left">Gudang Asal</th>
-                        <th className="p-3 text-left">SKU / Bahan</th>
-                        <th className="p-3 text-center">Batch</th>
-                        <th className="p-3 text-right">Persediaan</th>
-                        <th className="p-3 text-center">QC</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {primaryDashboardData.rawRows.map((row)=>(
-                        <tr key={row.key} className="hover:bg-slate-50">
-                          <td className="p-3">
-                            <span className="font-mono text-xs font-black text-violet-700">{row.mo}</span>
-                          </td>
-                          <td className="p-3 font-bold text-slate-700">{row.warehouse}</td>
-                          <td className="p-3">
-                            <div className="font-mono text-[10px] font-black text-blue-600">{row.skuId}</div>
-                            <div className="mt-1 font-bold text-slate-900">{row.name}</div>
-                          </td>
-                          <td className="p-3 text-center font-bold text-slate-600">{row.batchCount}</td>
-                          <td className="p-3 text-right">
-                            <span className="text-lg font-black text-blue-800">{row.qty.toLocaleString("id-ID")}</span>
-                            <span className="ml-1 text-[10px] font-black text-slate-400">{String(row.unit).toUpperCase()}</span>
-                          </td>
-                          <td className="p-3 text-center">
-                            <span className={"rounded-full px-2.5 py-1 text-[10px] font-black " + (row.qcStatus.includes("HOLD")||row.qcStatus.includes("REJECTED")?"bg-red-100 text-red-700":row.qcStatus.includes("PENDING")?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700")}>
-                              {row.qcStatus}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {primaryDashboardData.rawRows.length===0 && (
-                    <div className="p-10 text-center text-sm italic text-slate-400">
-                      Tidak ada stok aktif bahan baku Beras/Gula.
+                <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Quality Control</div>
+                      <h3 className="mt-1 text-lg font-black text-slate-900">Status QC</h3>
                     </div>
+                    <CheckCircle size={24} className="text-emerald-600"/>
+                  </div>
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl bg-blue-50 p-3">
+                      <div className="text-[10px] font-black text-blue-500">PENDING BAHAN</div>
+                      <div className="mt-1 text-2xl font-black text-blue-800">{dashboardSummary.pendingIncomingQc}</div>
+                    </div>
+                    <div className="rounded-2xl bg-emerald-50 p-3">
+                      <div className="text-[10px] font-black text-emerald-500">PENDING PRODUK</div>
+                      <div className="mt-1 text-2xl font-black text-emerald-800">{dashboardSummary.pendingFinishedQc}</div>
+                    </div>
+                    <div className="rounded-2xl bg-amber-50 p-3">
+                      <div className="text-[10px] font-black text-amber-600">HOLD</div>
+                      <div className="mt-1 text-2xl font-black text-amber-800">{dashboardSummary.holdQc}</div>
+                    </div>
+                    <div className="rounded-2xl bg-red-50 p-3">
+                      <div className="text-[10px] font-black text-red-500">REJECT</div>
+                      <div className="mt-1 text-2xl font-black text-red-800">{dashboardSummary.rejectedQc}</div>
+                    </div>
+                  </div>
+                  {hasAccess(["Super Admin","Admin","QC"]) && (
+                    <button
+                      type="button"
+                      onClick={()=>handleNavClick("qc")}
+                      className="mt-4 w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-black text-emerald-700 hover:bg-emerald-100"
+                    >
+                      Buka Quality Control
+                    </button>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                <div className="border-b border-slate-200 p-5">
-                  <div className="text-xs font-black uppercase tracking-[0.14em] text-emerald-500">
-                    Produk Jadi
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-emerald-600">GOOD / Siap Stok</div>
+                  <div className="mt-2 text-2xl font-black text-emerald-800">{dashboardSummary.goodPack.toLocaleString("id-ID")} <span className="text-xs font-bold">Pack</span></div>
+                  <div className="mt-1 text-xs font-bold text-emerald-600">{dashboardSummary.goodKg.toLocaleString("id-ID",{maximumFractionDigits:2})} Kg netto</div>
+                </div>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-amber-600">PROCESS</div>
+                  <div className="mt-2 text-2xl font-black text-amber-800">{dashboardSummary.processPack.toLocaleString("id-ID")} <span className="text-xs font-bold">Pack</span></div>
+                  <div className="mt-1 text-xs font-bold text-amber-600">{dashboardSummary.processKg.toLocaleString("id-ID",{maximumFractionDigits:2})} Kg</div>
+                </div>
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-red-600">DAMAGE</div>
+                  <div className="mt-2 text-2xl font-black text-red-800">{dashboardSummary.damagePack.toLocaleString("id-ID")} <span className="text-xs font-bold">Pack</span></div>
+                  <div className="mt-1 text-xs font-bold text-red-600">{dashboardSummary.damageKg.toLocaleString("id-ID",{maximumFractionDigits:2})} Kg</div>
+                </div>
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-blue-600">RELEASED FG</div>
+                  <div className="mt-2 text-2xl font-black text-blue-800">{dashboardSummary.releasedFinished}</div>
+                  <div className="mt-1 text-xs font-bold text-blue-600">batch produk jadi released</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <div className="lg:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Distribusi Lokasi</div>
+                      <h3 className="mt-1 font-black text-slate-900">Persediaan Berdasarkan Gudang / Tumpukan</h3>
+                    </div>
+                    <Boxes size={22} className="text-slate-400"/>
                   </div>
-                  <h2 className="mt-1 text-lg font-black text-slate-900">
-                    Persediaan Hasil Rebagging
-                  </h2>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Diurutkan berdasarkan MO Utama, kemudian Gudang Asal bahan.
-                  </p>
+                  <div className="mt-4 h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={stockByWarehouseData} margin={{ top: 15, right: 15, left: 5, bottom: 25 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill:"#64748b",fontSize:11}} angle={-12} textAnchor="end" height={55}/>
+                        <YAxis axisLine={false} tickLine={false} tick={{fill:"#64748b",fontSize:11}}/>
+                        <Tooltip cursor={{fill:"#f8fafc"}} contentStyle={{borderRadius:"14px",border:"1px solid #e2e8f0",boxShadow:"0 10px 30px rgb(15 23 42 / .08)"}}/>
+                        <Legend iconType="circle"/>
+                        <Bar dataKey="kg" fill="#ef4444" name="Kg" maxBarSize={48} radius={[8,8,0,0]}/>
+                        <Bar dataKey="pack" fill="#3b82f6" name="Pack" maxBarSize={48} radius={[8,8,0,0]}/>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[1120px] text-sm">
-                    <thead className="bg-slate-50 text-slate-500">
+                <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Expiry Monitor</div>
+                      <h3 className="mt-1 font-black text-slate-900">Kedaluwarsa Batch Aktif</h3>
+                    </div>
+                    <ShieldAlert size={23} className="text-amber-500"/>
+                  </div>
+                  <div className="mt-5 space-y-3">
+                    <div className="flex items-center justify-between rounded-xl bg-red-50 px-4 py-3">
+                      <div><div className="text-xs font-black text-red-700">EXPIRED</div><div className="text-[10px] text-red-500">perlu tindakan segera</div></div>
+                      <div className="text-2xl font-black text-red-800">{dashboardSummary.expiredCount}</div>
+                    </div>
+                    <div className="flex items-center justify-between rounded-xl bg-orange-50 px-4 py-3">
+                      <div><div className="text-xs font-black text-orange-700">≤ 30 HARI</div><div className="text-[10px] text-orange-500">prioritas FEFO</div></div>
+                      <div className="text-2xl font-black text-orange-800">{dashboardSummary.nearExpired30}</div>
+                    </div>
+                    <div className="flex items-center justify-between rounded-xl bg-amber-50 px-4 py-3">
+                      <div><div className="text-xs font-black text-amber-700">31–90 HARI</div><div className="text-[10px] text-amber-500">perlu monitoring</div></div>
+                      <div className="text-2xl font-black text-amber-800">{dashboardSummary.nearExpired90}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div className="flex flex-col gap-2 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Inventory Snapshot</div>
+                    <h3 className="mt-1 font-black text-slate-900">Ringkasan Persediaan per SKU</h3>
+                  </div>
+                  <button type="button" onClick={()=>handleNavClick("inventory")} className="self-start rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-black text-slate-600 hover:bg-slate-100">
+                    Lihat Inventori Lengkap
+                  </button>
+                </div>
+                <div className="max-h-[420px] overflow-auto">
+                  <table className="w-full min-w-[820px] text-sm">
+                    <thead className="sticky top-0 bg-slate-50 text-slate-500">
                       <tr>
-                        <th className="p-3 text-left">MO Utama</th>
-                        <th className="p-3 text-left">Gudang Asal</th>
-                        <th className="p-3 text-left">SKU / Produk Jadi</th>
-                        <th className="p-3 text-left">TM Hasil</th>
-                        <th className="p-3 text-left">Tumpukan</th>
+                        <th className="p-3 text-left">SKU / Produk</th>
+                        <th className="p-3 text-left">Kategori</th>
                         <th className="p-3 text-center">Batch</th>
-                        <th className="p-3 text-right">GOOD</th>
+                        <th className="p-3 text-right">GOOD / Stok</th>
                         <th className="p-3 text-right">PROCESS</th>
                         <th className="p-3 text-right">DAMAGE</th>
-                        <th className="p-3 text-center">QC</th>
+                        <th className="p-3 text-center">Pending QC</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {primaryDashboardData.finishedRows.map((row)=>(
-                        <tr key={row.key} className="hover:bg-slate-50">
+                      {dashboardSummary.skuRows.map(row=>(
+                        <tr key={row.id} className="hover:bg-slate-50">
                           <td className="p-3">
-                            <span className="font-mono text-xs font-black text-violet-700">{row.mo}</span>
+                            <div className="font-mono text-[10px] font-black text-blue-600">{row.id}</div>
+                            <div className="mt-1 font-bold text-slate-800">{row.name}</div>
                           </td>
-                          <td className="p-3 font-bold text-slate-700">{row.warehouse}</td>
                           <td className="p-3">
-                            <div className="font-mono text-[10px] font-black text-emerald-600">{row.skuId}</div>
-                            <div className="mt-1 font-bold text-slate-900">{row.name}</div>
+                            <span className={"rounded-full px-2.5 py-1 text-[10px] font-black " + (row.type==="rebagged"?"bg-emerald-50 text-emerald-700":"bg-blue-50 text-blue-700")}>
+                              {row.type==="rebagged"?"PRODUK JADI":"BAHAN"}
+                            </span>
                           </td>
-                          <td className="p-3 text-xs font-bold text-green-700">{row.tmResult || "-"}</td>
-                          <td className="p-3 font-bold text-slate-600">{row.targetStack}</td>
                           <td className="p-3 text-center font-bold text-slate-600">{row.batchCount}</td>
-                          <td className="p-3 text-right font-black text-emerald-700">{row.good.toLocaleString("id-ID")}</td>
+                          <td className="p-3 text-right font-black text-emerald-700">{row.good.toLocaleString("id-ID")} <span className="text-[10px] text-slate-400">{row.unit}</span></td>
                           <td className="p-3 text-right font-bold text-amber-700">{row.process ? row.process.toLocaleString("id-ID") : "-"}</td>
                           <td className="p-3 text-right font-bold text-red-700">{row.damage ? row.damage.toLocaleString("id-ID") : "-"}</td>
                           <td className="p-3 text-center">
-                            <span className={"rounded-full px-2.5 py-1 text-[10px] font-black " + (row.qcStatus.includes("RELEASED")||row.qcStatus==="LEGACY"?"bg-emerald-100 text-emerald-700":row.qcStatus.includes("PENDING")?"bg-amber-100 text-amber-700":"bg-red-100 text-red-700")}>
-                              {row.qcStatus}
-                            </span>
+                            {row.pendingQc > 0 ? (
+                              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black text-amber-700">{row.pendingQc}</span>
+                            ) : (
+                              <span className="text-xs font-bold text-slate-300">0</span>
+                            )}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  {primaryDashboardData.finishedRows.length===0 && (
-                    <div className="p-10 text-center text-sm italic text-slate-400">
-                      Belum ada persediaan produk jadi.
-                    </div>
+                  {dashboardSummary.skuRows.length===0 && (
+                    <div className="p-10 text-center text-sm italic text-slate-400">Belum ada persediaan aktif.</div>
                   )}
                 </div>
               </div>
