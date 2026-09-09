@@ -16,7 +16,7 @@ import * as XLSX from 'xlsx';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, writeBatch } from "firebase/firestore";
+import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, writeBatch, runTransaction } from "firebase/firestore";
 
 // --- DEFAULT DATA ---
 const STACK_LOCATIONS = ["Unit Pengolahan 20", "RTR 60", "Gula 17"];
@@ -111,8 +111,21 @@ const SearchableSelect = ({ options, value, onChange, placeholder }) => {
 // --- APLIKASI UTAMA ---
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem("rebagging_session");
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem("rebagging_session");
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      if (!parsed?.username || !parsed?.role) {
+        localStorage.removeItem("rebagging_session");
+        return null;
+      }
+      // Jangan simpan password di session browser.
+      return { username: parsed.username, role: parsed.role };
+    } catch (error) {
+      console.error("Session Parse Error:", error);
+      localStorage.removeItem("rebagging_session");
+      return null;
+    }
   });
   
   const [users, setUsers] = useState([]);
@@ -130,6 +143,7 @@ export default function App() {
   
   const [fbUser, setFbUser] = useState(null);
   const [dbLoading, setDbLoading] = useState(true);
+  const [dbError, setDbError] = useState("");
   const [activeOpTab, setActiveOpTab] = useState("inbound");
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
@@ -147,32 +161,104 @@ export default function App() {
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
 
   useEffect(() => {
-    if (!auth) return setDbLoading(false);
-    const initAuth = async () => { try { await signInAnonymously(auth); } catch(e){} };
+    if (!auth) {
+      setDbError("Firebase Authentication tidak tersedia.");
+      setDbLoading(false);
+      return;
+    }
+
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (error) {
+        console.error("Firebase Auth Error:", error);
+        setDbError(`Gagal terhubung ke Firebase Authentication: ${error.message || "unknown error"}`);
+        setDbLoading(false);
+      }
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(
+      auth,
+      setFbUser,
+      (error) => {
+        console.error("Firebase Auth State Error:", error);
+        setDbError(`Firebase Authentication bermasalah: ${error.message || "unknown error"}`);
+        setDbLoading(false);
+      }
+    );
+
     initAuth();
-    return onAuthStateChanged(auth, setFbUser);
+    return unsubscribeAuth;
   }, []);
 
   useEffect(() => {
     if (!fbUser || !db) return;
-    const unsubUsers = onSnapshot(collection(db, "artifacts", appId, "public", "data", "users"), snap => {
-      if (snap.empty) DEFAULT_USERS.forEach(u => setDoc(doc(db, "artifacts", appId, "public", "data", "users", u.username), u));
-      else setUsers(snap.docs.map(d => d.data()));
-    });
-    const unsubSkus = onSnapshot(collection(db, "artifacts", appId, "public", "data", "skus"), snap => {
-      setSkus(snap.docs.map(d => d.data()));
+
+    const handleDbError = (source) => (error) => {
+      console.error(`Firestore ${source} Error:`, error);
+      setDbError(`Gagal membaca database (${source}): ${error.message || "unknown error"}`);
       setDbLoading(false);
-    });
-    const unsubBatches = onSnapshot(collection(db, "artifacts", appId, "public", "data", "batches"), snap => {
-      setInventoryBatches(snap.docs.map(d => d.data()));
-    });
-    const unsubTx = onSnapshot(collection(db, "artifacts", appId, "public", "data", "transactions"), snap => {
-      setTransactions(snap.docs.map(d => d.data()).sort((a,b) => new Date(b.date) - new Date(a.date)));
-    });
-    const unsubConfig = onSnapshot(doc(db, "artifacts", appId, "public", "data", "config", "system"), snap => {
-      if (snap.exists()) setSystemConfig(snap.data());
-    });
-    return () => { unsubUsers(); unsubSkus(); unsubBatches(); unsubTx(); unsubConfig(); };
+    };
+
+    const unsubUsers = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "users"),
+      (snap) => {
+        if (snap.empty) {
+          setUsers(DEFAULT_USERS);
+          Promise.all(
+            DEFAULT_USERS.map((u) =>
+              setDoc(doc(db, "artifacts", appId, "public", "data", "users", u.username), u)
+            )
+          ).catch(handleDbError("inisialisasi pengguna"));
+        } else {
+          setUsers(snap.docs.map((d) => d.data()));
+        }
+      },
+      handleDbError("pengguna")
+    );
+
+    const unsubSkus = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "skus"),
+      (snap) => {
+        setSkus(snap.docs.map((d) => d.data()));
+        setDbLoading(false);
+      },
+      handleDbError("SKU")
+    );
+
+    const unsubBatches = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "batches"),
+      (snap) => setInventoryBatches(snap.docs.map((d) => d.data())),
+      handleDbError("stok batch")
+    );
+
+    const unsubTx = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "transactions"),
+      (snap) => {
+        setTransactions(
+          snap.docs
+            .map((d) => d.data())
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+        );
+      },
+      handleDbError("transaksi")
+    );
+
+    const unsubConfig = onSnapshot(
+      doc(db, "artifacts", appId, "public", "data", "config", "system"),
+      (snap) => {
+        if (snap.exists()) setSystemConfig(snap.data());
+      },
+      handleDbError("konfigurasi")
+    );
+
+    return () => {
+      unsubUsers();
+      unsubSkus();
+      unsubBatches();
+      unsubTx();
+      unsubConfig();
+    };
   }, [fbUser]);
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
@@ -181,7 +267,13 @@ export default function App() {
   const handleLogin = (e) => {
     e.preventDefault();
     const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
-    if (user) { setCurrentUser(user); localStorage.setItem("rebagging_session", JSON.stringify(user)); setLoginError(""); }
+    if (user) {
+      const sessionUser = { username: user.username, role: user.role };
+      setCurrentUser(sessionUser);
+      localStorage.setItem("rebagging_session", JSON.stringify(sessionUser));
+      setLoginError("");
+      setLoginForm({ username: "", password: "" });
+    }
     else setLoginError("Username/password salah!");
   };
 
@@ -201,47 +293,195 @@ export default function App() {
 
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
-    const date = new Date().toISOString();
-    let txData, batchData, batchUpdates = [];
 
-    if (activeOpTab === "inbound") {
-      const sku = skus.find(s => s.id === formData.inSkuId);
-      const qty = parseFloat(formData.inQty);
-      const batchId = `INB-${Date.now()}`;
-      batchData = { batchId, skuId: sku.id, initialQty: qty, currentQty: qty, sourceWarehouse: formData.inSourceWarehouse, date };
-      txData = { id: `TRX-${Date.now()}`, date, type: "INBOUND", skuId: sku.id, skuName: sku.name, qtyChange: qty, unit: sku.unit, operator: currentUser.username, sourceWarehouse: formData.inSourceWarehouse };
-      batchUpdates.push({ type: 'set', id: batchId, data: batchData });
-    } else if (activeOpTab === "rebagging") {
-      const b1 = inventoryBatches.find(b => b.batchId === formData.bulkBatchId);
-      const targetSku = skus.find(s => s.id === formData.rebagTargetSkuId);
-      const qty = parseFloat(formData.qtyToProcess) || 0;
-      if (qty > b1.currentQty) return alert("Qty melebihi stok!");
-      const resultQty = qty;
-      const newBatchId = `RBG-${Date.now()}`;
-      batchData = { batchId: newBatchId, skuId: targetSku.id, currentQty: resultQty, sourceWarehouse: b1.sourceWarehouse, targetStack: formData.rebagTargetStack, date };
-      txData = { id: `TRX-${Date.now()}`, date, type: "REBAGGING", skuId: targetSku.id, skuName: targetSku.name, qtyChange: resultQty, unit: targetSku.unit, operator: currentUser.username, targetStack: formData.rebagTargetStack };
-      batchUpdates.push({ type: 'update', id: b1.batchId, data: { ...b1, currentQty: b1.currentQty - qty } });
-      batchUpdates.push({ type: 'set', id: newBatchId, data: batchData });
-    } else if (activeOpTab === "outbound") {
-      let hasOutbound = false;
-      Object.entries(outboundSelections).forEach(([bId, qtyStr]) => {
-        const q = parseFloat(qtyStr);
-        if (q > 0) {
-          hasOutbound = true;
-          const b = inventoryBatches.find(x => x.batchId === bId);
-          batchUpdates.push({ type: 'update', id: bId, data: { ...b, currentQty: b.currentQty - q } });
-          txData = { id: `TRX-${Date.now()}-${bId}`, date, type: "OUTBOUND", skuId: formData.outSkuId, skuName: skus.find(s=>s.id===formData.outSkuId).name, qtyChange: q, operator: currentUser.username };
+    if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
+
+    const timestamp = Date.now();
+    const date = new Date(timestamp).toISOString();
+
+    try {
+      if (activeOpTab === "inbound") {
+        const sku = skus.find((s) => s.id === formData.inSkuId);
+        const qty = Number(formData.inQty);
+
+        if (!sku) return alert("Pilih SKU barang masuk terlebih dahulu.");
+        if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas barang masuk harus lebih dari 0.");
+        if (!formData.inSourceWarehouse?.trim()) return alert("Gudang asal wajib diisi.");
+
+        const batchId = `INB-${timestamp}`;
+        const txId = `TRX-${timestamp}`;
+        const batchData = {
+          batchId,
+          skuId: sku.id,
+          initialQty: qty,
+          currentQty: qty,
+          sourceWarehouse: formData.inSourceWarehouse.trim(),
+          date,
+        };
+        const txData = {
+          id: txId,
+          date,
+          type: "INBOUND",
+          skuId: sku.id,
+          skuName: sku.name,
+          qtyChange: qty,
+          unit: sku.unit,
+          operator: currentUser.username,
+          sourceWarehouse: formData.inSourceWarehouse.trim(),
+          batchId,
+        };
+
+        await runTransaction(db, async (transaction) => {
+          transaction.set(
+            doc(db, "artifacts", appId, "public", "data", "batches", batchId),
+            batchData
+          );
+          transaction.set(
+            doc(db, "artifacts", appId, "public", "data", "transactions", txId),
+            txData
+          );
+        });
+      } else if (activeOpTab === "rebagging") {
+        const selectedBatch = inventoryBatches.find(
+          (b) => b.batchId === formData.bulkBatchId
+        );
+        const targetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
+        const qty = Number(formData.qtyToProcess);
+
+        if (!selectedBatch) return alert("Pilih batch bahan baku yang valid.");
+        if (!targetSku) return alert("Pilih SKU hasil rebagging.");
+        if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas proses harus lebih dari 0.");
+        if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
+
+        const sourceBatchRef = doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "batches",
+          selectedBatch.batchId
+        );
+        const newBatchId = `RBG-${timestamp}`;
+        const txId = `TRX-${timestamp}`;
+
+        await runTransaction(db, async (transaction) => {
+          const sourceSnap = await transaction.get(sourceBatchRef);
+          if (!sourceSnap.exists()) throw new Error("Batch bahan baku tidak ditemukan.");
+
+          const liveBatch = sourceSnap.data();
+          const liveQty = Number(liveBatch.currentQty) || 0;
+          if (qty > liveQty) {
+            throw new Error(`Qty melebihi stok terbaru. Stok tersedia: ${liveQty}`);
+          }
+
+          transaction.update(sourceBatchRef, { currentQty: liveQty - qty });
+
+          transaction.set(
+            doc(db, "artifacts", appId, "public", "data", "batches", newBatchId),
+            {
+              batchId: newBatchId,
+              skuId: targetSku.id,
+              initialQty: qty,
+              currentQty: qty,
+              sourceWarehouse: liveBatch.sourceWarehouse || selectedBatch.sourceWarehouse || "",
+              targetStack: formData.rebagTargetStack,
+              sourceBatchId: selectedBatch.batchId,
+              date,
+            }
+          );
+
+          transaction.set(
+            doc(db, "artifacts", appId, "public", "data", "transactions", txId),
+            {
+              id: txId,
+              date,
+              type: "REBAGGING",
+              skuId: targetSku.id,
+              skuName: targetSku.name,
+              qtyChange: qty,
+              unit: targetSku.unit,
+              operator: currentUser.username,
+              targetStack: formData.rebagTargetStack,
+              sourceBatchId: selectedBatch.batchId,
+              batchId: newBatchId,
+            }
+          );
+        });
+      } else if (activeOpTab === "outbound") {
+        const sku = skus.find((s) => s.id === formData.outSkuId);
+        if (!sku) return alert("Pilih barang yang akan dikeluarkan.");
+
+        const selections = Object.entries(outboundSelections)
+          .map(([batchId, qtyValue]) => ({
+            batchId,
+            qty: Number(qtyValue),
+            localBatch: inventoryBatches.find((b) => b.batchId === batchId),
+          }))
+          .filter(({ qty }) => Number.isFinite(qty) && qty > 0);
+
+        if (selections.length === 0) return alert("Isi qty untuk outbound!");
+
+        for (const item of selections) {
+          if (!item.localBatch || item.localBatch.skuId !== sku.id) {
+            return alert(`Batch ${item.batchId} tidak valid untuk SKU yang dipilih.`);
+          }
         }
-      });
-      if (!hasOutbound) return alert("Isi qty untuk outbound!");
-    }
 
-    if (db) {
-      for (const update of batchUpdates) await setDoc(doc(db, "artifacts", appId, "public", "data", "batches", update.id), update.data);
-      if (txData) await setDoc(doc(db, "artifacts", appId, "public", "data", "transactions", txData.id), txData);
+        await runTransaction(db, async (transaction) => {
+          // Semua pembacaan dilakukan lebih dahulu agar transaksi Firestore tetap valid.
+          const refs = selections.map((item) =>
+            doc(db, "artifacts", appId, "public", "data", "batches", item.batchId)
+          );
+          const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)));
+
+          snapshots.forEach((snap, index) => {
+            if (!snap.exists()) throw new Error(`Batch ${selections[index].batchId} tidak ditemukan.`);
+            const liveBatch = snap.data();
+            const liveQty = Number(liveBatch.currentQty) || 0;
+            if (liveBatch.skuId !== sku.id) {
+              throw new Error(`Batch ${selections[index].batchId} tidak sesuai SKU yang dipilih.`);
+            }
+            if (selections[index].qty > liveQty) {
+              throw new Error(
+                `Qty outbound batch ${selections[index].batchId} melebihi stok terbaru (${liveQty}).`
+              );
+            }
+          });
+
+          snapshots.forEach((snap, index) => {
+            const item = selections[index];
+            const liveBatch = snap.data();
+            const liveQty = Number(liveBatch.currentQty) || 0;
+            const txId = `TRX-${timestamp}-${index + 1}`;
+
+            transaction.update(refs[index], { currentQty: liveQty - item.qty });
+            transaction.set(
+              doc(db, "artifacts", appId, "public", "data", "transactions", txId),
+              {
+                id: txId,
+                date,
+                type: "OUTBOUND",
+                skuId: sku.id,
+                skuName: sku.name,
+                qtyChange: item.qty,
+                unit: sku.unit,
+                operator: currentUser.username,
+                batchId: item.batchId,
+                sourceWarehouse: liveBatch.sourceWarehouse || "",
+              }
+            );
+          });
+        });
+      }
+
+      showNotif("Transaksi Berhasil Disimpan");
+      setFormData(initialFormData);
+      setOutboundSelections({});
+    } catch (error) {
+      console.error("Transaction Error:", error);
+      alert(`Transaksi gagal disimpan: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
     }
-    showNotif("Transaksi Berhasil Disimpan");
-    setFormData(initialFormData); setOutboundSelections({});
   };
 
   const handleAddManualSku = async (e) => {
@@ -333,6 +573,22 @@ export default function App() {
     if (db) await setDoc(doc(db, "artifacts", appId, "public", "data", "config", "system"), systemConfig);
     showNotif("Konfigurasi Sistem Diperbarui");
   };
+
+  if (dbError) return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white border border-red-200 rounded-2xl shadow-sm p-6 max-w-lg w-full text-center">
+        <div className="text-red-600 font-black text-xl mb-2">Koneksi Database Bermasalah</div>
+        <p className="text-slate-600 text-sm mb-5">{dbError}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="bg-red-600 hover:bg-red-700 text-white font-bold px-5 py-3 rounded-lg"
+        >
+          Muat Ulang Aplikasi
+        </button>
+      </div>
+    </div>
+  );
 
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   
