@@ -4,7 +4,7 @@ import {
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
   Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye,
-  Menu, X
+  Menu, X, LogIn, UserRound, LockKeyhole
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
@@ -1307,29 +1307,156 @@ export default function App() {
   if (dbLoading) return <div className="min-h-screen flex items-center justify-center"><Package className="animate-pulse w-12 h-12 text-red-600"/></div>;
   
   if (!currentUser) return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-xl border border-slate-200 w-full max-w-md">
-        <div className="flex flex-col items-center justify-center mb-8">
-          {systemConfig.logo && (
-            <img src={systemConfig.logo} alt="Logo" className="w-40 sm:w-48 h-auto mb-4 object-contain" />
-          )}
-          <h1 className="text-xl sm:text-2xl font-black text-center text-slate-800">{systemConfig.name}</h1>
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-red-950">
+      <div className="pointer-events-none absolute -top-28 -left-20 h-80 w-80 rounded-full bg-red-600/20 blur-3xl"></div>
+      <div className="pointer-events-none absolute -bottom-36 -right-24 h-96 w-96 rounded-full bg-white/5 blur-3xl"></div>
+
+      <div className="relative z-10 min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-10">
+        <div className="w-full max-w-5xl overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl shadow-black/30 grid lg:grid-cols-[1.05fr_0.95fr]">
+
+          <div className="hidden lg:flex relative min-h-[650px] flex-col justify-between overflow-hidden bg-slate-950 p-10 xl:p-12 text-white">
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-red-600/20 via-transparent to-blue-500/10"></div>
+            <div className="pointer-events-none absolute -right-20 top-24 h-64 w-64 rounded-full border border-white/10"></div>
+            <div className="pointer-events-none absolute -right-4 top-40 h-40 w-40 rounded-full border border-white/10"></div>
+
+            <div className="relative z-10">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-bold tracking-[0.18em] text-slate-300">
+                <span className="h-2 w-2 rounded-full bg-red-500"></span>
+                SISTEM OPERASIONAL GUDANG
+              </div>
+
+              <div className="mt-10">
+                {systemConfig.logo ? (
+                  <div className="inline-flex rounded-2xl bg-white p-4 shadow-2xl shadow-black/20">
+                    <img src={systemConfig.logo} alt="Logo" className="h-14 w-auto object-contain" />
+                  </div>
+                ) : (
+                  <div className="inline-flex h-20 w-20 items-center justify-center rounded-2xl bg-red-600 shadow-xl shadow-red-950/40">
+                    <Package size={38} />
+                  </div>
+                )}
+
+                <h1 className="mt-8 max-w-md text-4xl font-black leading-tight tracking-tight">
+                  {systemConfig.name}
+                </h1>
+                <p className="mt-4 max-w-md text-sm leading-7 text-slate-400">
+                  Kelola inbound, proses rebagging, outbound, persediaan batch, serta dokumen operasional dalam satu sistem terintegrasi.
+                </p>
+              </div>
+            </div>
+
+            <div className="relative z-10 grid grid-cols-3 gap-3">
+              {[
+                ["Inbound", "Penerimaan"],
+                ["Rebagging", "Produksi"],
+                ["Outbound", "Pengeluaran"],
+              ].map(([title, desc]) => (
+                <div key={title} className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
+                  <p className="text-sm font-black text-white">{title}</p>
+                  <p className="mt-1 text-[11px] font-medium text-slate-500">{desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex min-h-[650px] items-center bg-white p-6 sm:p-10 lg:p-12">
+            <div className="mx-auto w-full max-w-md">
+              <div className="mb-8 lg:hidden">
+                <div className="flex items-center gap-4">
+                  {systemConfig.logo ? (
+                    <div className="flex h-16 min-w-16 items-center justify-center rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                      <img src={systemConfig.logo} alt="Logo" className="max-h-11 w-auto object-contain" />
+                    </div>
+                  ) : (
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-600 text-white shadow-lg shadow-red-100">
+                      <Package size={30} />
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-red-600">Sistem Gudang</p>
+                    <h1 className="mt-1 text-xl font-black leading-tight text-slate-900">{systemConfig.name}</h1>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-8">
+                <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600">
+                  <LogIn size={23} />
+                </div>
+                <h2 className="text-3xl font-black tracking-tight text-slate-900">Selamat datang</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  Masuk menggunakan akun yang telah terdaftar untuk mengakses sistem.
+                </p>
+              </div>
+
+              {loginError && (
+                <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                  {loginError}
+                </div>
+              )}
+
+              <form onSubmit={handleLogin} className="space-y-5">
+                <div>
+                  <label className="mb-2 block text-sm font-bold text-slate-700">Username</label>
+                  <div className="group relative">
+                    <UserRound className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-red-500" size={19} />
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3.5 pl-12 pr-4 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-red-400 focus:bg-white focus:ring-4 focus:ring-red-50"
+                      placeholder="Masukkan username"
+                      value={loginForm.username}
+                      onChange={e=>setLoginForm({...loginForm, username: e.target.value})}
+                      autoComplete="username"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-bold text-slate-700">Password</label>
+                  <div className="group relative">
+                    <LockKeyhole className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-red-500" size={19} />
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3.5 pl-12 pr-4 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-red-400 focus:bg-white focus:ring-4 focus:ring-red-50"
+                      type="password"
+                      placeholder="Masukkan password"
+                      value={loginForm.password}
+                      onChange={e=>setLoginForm({...loginForm, password: e.target.value})}
+                      autoComplete="current-password"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="group flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black text-white shadow-lg shadow-red-200 transition-all hover:-translate-y-0.5 hover:bg-red-700 hover:shadow-xl active:translate-y-0"
+                >
+                  Masuk ke Sistem
+                  <LogIn size={18} className="transition-transform group-hover:translate-x-0.5" />
+                </button>
+              </form>
+
+              <div className="my-7 flex items-center gap-4">
+                <div className="h-px flex-1 bg-slate-200"></div>
+                <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">akses terbatas</span>
+                <div className="h-px flex-1 bg-slate-200"></div>
+              </div>
+
+              <button
+                onClick={handleGuestLogin}
+                type="button"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-bold text-slate-600 transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
+              >
+                <Eye size={18} className="text-slate-400"/>
+                Masuk sebagai Tamu (View Only)
+              </button>
+
+              <p className="mt-8 text-center text-[11px] leading-5 text-slate-400">
+                Akses sistem hanya untuk pengguna yang berwenang. Aktivitas transaksi tercatat pada sistem.
+              </p>
+            </div>
+          </div>
         </div>
-        {loginError && <p className="text-red-500 text-sm mb-4 font-semibold text-center">{loginError}</p>}
-        <form onSubmit={handleLogin} className="space-y-4">
-          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all text-sm sm:text-base" placeholder="Username" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username: e.target.value})} />
-          <input className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-red-500 focus:bg-white transition-all text-sm sm:text-base" type="password" placeholder="Password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm, password: e.target.value})} />
-          <button type="submit" className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-colors shadow-lg mt-2">Login ke Sistem</button>
-        </form>
-        
-        <div className="mt-6 flex items-center justify-center">
-          <div className="h-px bg-slate-200 w-full"></div>
-          <span className="px-4 text-xs sm:text-sm text-slate-400 font-medium whitespace-nowrap">ATAU</span>
-          <div className="h-px bg-slate-200 w-full"></div>
-        </div>
-        <button onClick={handleGuestLogin} type="button" className="w-full mt-6 bg-white text-slate-600 border-2 border-slate-200 font-bold py-3.5 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center justify-center gap-2 text-sm sm:text-base">
-          <Eye size={18} className="text-slate-500"/> Masuk Tanpa Login (View Only)
-        </button>
       </div>
     </div>
   );
@@ -1447,9 +1574,21 @@ export default function App() {
           {activeMenu === "inventory" && (
             <div className="space-y-6">
               <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Inventori Gudang</h1>
-              <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
-                <button onClick={()=>setActiveInvTab('bulk')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='bulk'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Bahan Baku (Curah)</button>
-                <button onClick={()=>setActiveInvTab('rebagged')} className={`pb-3 text-sm font-semibold transition-all ${activeInvTab==='rebagged'?'border-b-2 border-red-600 text-red-600':'text-slate-500 hover:text-slate-800'}`}>Barang Jadi (Kemasan)</button>
+              <div className="w-full overflow-x-auto pb-1">
+                <div className="inline-flex min-w-max items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
+                  <button
+                    onClick={()=>setActiveInvTab('bulk')}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeInvTab==='bulk'?'bg-white text-red-600 shadow-md ring-1 ring-black/5':'text-slate-500 hover:bg-white/70 hover:text-slate-800'}`}
+                  >
+                    <Database size={17}/> Bahan Baku
+                  </button>
+                  <button
+                    onClick={()=>setActiveInvTab('rebagged')}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeInvTab==='rebagged'?'bg-white text-red-600 shadow-md ring-1 ring-black/5':'text-slate-500 hover:bg-white/70 hover:text-slate-800'}`}
+                  >
+                    <Boxes size={17}/> Produk Jadi
+                  </button>
+                </div>
               </div>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
                 <table className="w-full text-sm text-left min-w-[780px]">
@@ -1493,10 +1632,27 @@ export default function App() {
             <div className="space-y-6">
                <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
                <div className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200">
-                  <div className="flex gap-4 sm:gap-6 mb-8 border-b border-slate-200 overflow-x-auto whitespace-nowrap">
-                    <button onClick={()=>setActiveOpTab('inbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='inbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Inbound (Masuk)</button>
-                    <button onClick={()=>setActiveOpTab('rebagging')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='rebagging'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Proses Rebagging</button>
-                    <button onClick={()=>setActiveOpTab('outbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='outbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Outbound (Keluar)</button>
+                  <div className="mb-8 overflow-x-auto pb-1">
+                    <div className="inline-flex min-w-max items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
+                      <button
+                        onClick={()=>setActiveOpTab('inbound')}
+                        className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='inbound'?'bg-blue-600 text-white shadow-lg shadow-blue-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                      >
+                        <PackagePlus size={17}/> Inbound
+                      </button>
+                      <button
+                        onClick={()=>setActiveOpTab('rebagging')}
+                        className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='rebagging'?'bg-red-600 text-white shadow-lg shadow-red-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                      >
+                        <Settings2 size={17}/> Rebagging
+                      </button>
+                      <button
+                        onClick={()=>setActiveOpTab('outbound')}
+                        className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='outbound'?'bg-orange-500 text-white shadow-lg shadow-orange-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                      >
+                        <ArrowRightLeft size={17}/> Outbound
+                      </button>
+                    </div>
                   </div>
                   <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-xl">
                     {isVerifiedSuperAdmin && (
@@ -1684,10 +1840,27 @@ export default function App() {
             <div className="space-y-6">
               <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Pengaturan Super Admin</h1>
               
-              <div className="flex gap-4 sm:gap-6 border-b border-slate-200 overflow-x-auto whitespace-nowrap pb-1">
-                <button onClick={()=>setActiveTabSettings('system')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='system'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Profil Sistem</button>
-                <button onClick={()=>setActiveTabSettings('sku')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='sku'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Database SKU</button>
-                <button onClick={()=>setActiveTabSettings('users')} className={`pb-2 text-sm font-bold transition-all ${activeTabSettings==='users'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Kelola Pengguna</button>
+              <div className="overflow-x-auto pb-1">
+                <div className="inline-flex min-w-max items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
+                  <button
+                    onClick={()=>setActiveTabSettings('system')}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='system'?'bg-slate-900 text-white shadow-lg':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                  >
+                    <Settings2 size={17}/> Profil Sistem
+                  </button>
+                  <button
+                    onClick={()=>setActiveTabSettings('sku')}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='sku'?'bg-slate-900 text-white shadow-lg':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                  >
+                    <Database size={17}/> Database SKU
+                  </button>
+                  <button
+                    onClick={()=>setActiveTabSettings('users')}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='users'?'bg-slate-900 text-white shadow-lg':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                  >
+                    <Users size={17}/> Pengguna
+                  </button>
+                </div>
               </div>
               
               {activeTabSettings === 'system' && (
