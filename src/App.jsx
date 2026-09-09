@@ -11,6 +11,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, ResponsiveContainer
 } from 'recharts';
 import * as XLSX from 'xlsx';
+import { jsPDF } from "jspdf";
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp, getApps, getApp } from "firebase/app";
@@ -108,6 +109,249 @@ const SearchableSelect = ({ options, value, onChange, placeholder }) => {
   );
 };
 
+function getDefaultExpiryDate() {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatPdfDate(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString("id-ID");
+}
+
+function loadPdfLogo() {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = "/logo.png";
+  });
+}
+
+async function generateRebaggingBatchPdf(tx) {
+  const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const L = 18.5;
+  const R = 571.3;
+  const W = R - L;
+  const lineColor = 35;
+  const gray = 225;
+
+  const line = (x1, y1, x2, y2, width = 0.45) => {
+    pdf.setDrawColor(lineColor);
+    pdf.setLineWidth(width);
+    pdf.line(x1, y1, x2, y2);
+  };
+  const box = (x, y, w, h, fill = false) => {
+    pdf.setDrawColor(lineColor);
+    pdf.setLineWidth(0.45);
+    if (fill) {
+      pdf.setFillColor(gray);
+      pdf.rect(x, y, w, h, "FD");
+    } else {
+      pdf.rect(x, y, w, h);
+    }
+  };
+  const txt = (value, x, y, opts = {}) => {
+    const { size = 6.4, bold = false, align = "left", maxWidth = null } = opts;
+    pdf.setFont("helvetica", bold ? "bold" : "normal");
+    pdf.setFontSize(size);
+    pdf.setTextColor(0);
+    const str = String(value ?? "");
+    if (maxWidth) {
+      const lines = pdf.splitTextToSize(str, maxWidth);
+      pdf.text(lines, x, y, { align });
+    } else {
+      pdf.text(str, x, y, { align });
+    }
+  };
+  const section = (label, y) => {
+    box(L, y, W, 9, true);
+    txt(label, L + 2, y + 6.5, { size: 6.6, bold: true });
+  };
+
+  box(L, 63.5, W, 656.5);
+
+  line(301.1, 63.5, 301.1, 100);
+  [72.7, 81.7, 90.7, 100].forEach((y) => line(301.1, y, R, y));
+  try {
+    const logo = await loadPdfLogo();
+    pdf.addImage(logo, "PNG", 28, 70, 125, 28);
+  } catch (error) {
+    console.warn("Logo PDF tidak dapat dimuat:", error);
+    txt("BULOG", 55, 91, { size: 24, bold: true });
+  }
+  txt("PERUM BULOG", 436, 70.5, { size: 7.3, bold: true, align: "center" });
+  txt("Jl. Pelepah Raya, RW.5, Klp. Gading Barat, Kec. Klp. Gading, Jakarta Utara", 436, 79.2, { size: 5.2, bold: true, align: "center" });
+  txt("CATATAN PROSES REBAGGING BATCH", 436, 88.2, { size: 7.2, bold: true, align: "center" });
+  const productName = (tx.skuName || "GULA MANISKITA 1 KG KOM DN").toUpperCase();
+  txt("NAMA PRODUK : " + productName, 436, 97, { size: 7, bold: true, align: "center", maxWidth: 255 });
+
+  [100, 109, 118, 127, 136].forEach((y) => line(L, y, R, y));
+  line(339.7, 100, 339.7, 136);
+  txt("No. Batch", 20, 106.5);
+  txt(":", 79, 106.5);
+  txt(tx.batchId || "", 86, 106.5, { bold: true });
+  txt("Tanggal Kadaluwarsa", 341.5, 106.5);
+  txt(":", 430, 106.5);
+  txt(formatPdfDate(tx.expiryDate), 438, 106.5, { bold: true });
+
+  txt("Tanggal Produksi", 20, 115.5);
+  txt(":", 79, 115.5);
+  txt(formatPdfDate(tx.productionDate || tx.date), 86, 115.5, { bold: true });
+  txt("Pengawas", 341.5, 115.5);
+  txt(":", 397, 115.5);
+  txt(tx.supervisor || tx.operator || "", 404, 115.5, { bold: true });
+
+  txt("Pelaksana", 20, 124.5);
+  txt(":", 79, 124.5);
+  txt(tx.executor || "KOPEL JAYA", 86, 124.5, { bold: true });
+  txt("No. MO", 20, 133.5);
+  txt(":", 79, 133.5);
+  txt(tx.moNumber || "", 86, 133.5, { bold: true });
+  txt("Tanggal", 341.5, 133.5);
+  txt(":", 397, 133.5);
+  txt(formatPdfDate(tx.productionDate || tx.date), 404, 133.5, { bold: true });
+
+  section("1. KESIAPAN", 136);
+  const readyRows = [
+    "Kondisi ruangan produksi dalam keadaan bersih",
+    "Peralatan produksi dalam keadaan bersih",
+    "Higiene karyawan sudah baik",
+  ];
+  [145, 160.5, 176, 191].forEach((y) => line(L, y, R, y));
+  [301.1, 339.7, 378.2].forEach((x) => line(x, 145, x, 191));
+  readyRows.forEach((label, i) => {
+    const y = 154.5 + i * 15.5;
+    txt(label, 20, y);
+    txt("Ya", 320, y, { align: "center" });
+    txt("Tidak", 359, y, { align: "center" });
+    txt("Paraf pelaksana:", 381, y);
+  });
+
+  section("2. TAHAP PERSIAPAN", 191);
+  box(L, 200, W, 9, true);
+  txt("2.1 Sortasi Bahan Baku Gula Curah 50 Kg", 20, 206.5, { bold: true });
+  line(L, 209, R, 209);
+  line(L, 218, R, 218);
+  line(L, 227, R, 227);
+  line(301.1, 209, 301.1, 218);
+  line(378.2, 209, 378.2, 218);
+  txt("Mulai jam :", 20, 215.5);
+  txt("Selesai jam :", 304, 215.5);
+  txt("Paraf pelaksana:", 381, 215.5);
+  txt("Pemeriksaan sesuai standar : Ya / Tidak", 20, 224.5);
+
+  section("3. PENIMBANGAN", 227);
+  [236, 245, 254, 263, 272, 281, 290, 299].forEach((y) => line(L, y, R, y));
+  [166.7, 301.1, 339.7, 378.2].forEach((x) => line(x, 236, x, 299));
+  txt("Bahan", 92, 242.5, { bold: true, align: "center" });
+  txt("Jumlah Standar", 234, 242.5, { bold: true, align: "center" });
+  txt("Aktual", 320, 242.5, { bold: true, align: "center" });
+  txt("Pelaksana", 359, 242.5, { bold: true, align: "center" });
+  txt("Pengawas", 474, 242.5, { bold: true, align: "center" });
+
+  const sourceQty = Number(tx.sourceQty ?? tx.qtyChange ?? 0);
+  const finishedQty = Number(tx.finishedQty ?? tx.qtyChange ?? 0);
+  const sourceUnit = tx.sourceUnit || "KG";
+  const finishedUnit = tx.finishedUnit || tx.unit || "Pack";
+  const executor = tx.executor || "KOPEL JAYA";
+  const supervisor = tx.supervisor || tx.operator || "";
+  const materials = [
+    ["Gula Curah", sourceQty ? sourceQty + " " + sourceUnit : "", executor, supervisor],
+    ["Plastik PP 1 Kg", finishedQty ? finishedQty + " " + finishedUnit : "", executor, supervisor],
+    ["Karton", "", "", ""],
+    ["Lakban", "", "", ""],
+    ["Tinta Inkjet Exp Date", "", "", ""],
+  ];
+  materials.forEach((row, i) => {
+    const y = 251.5 + i * 9;
+    txt(row[0], 20, y);
+    txt(row[1], 320, y, { align: "center" });
+    txt(row[2], 359, y, { align: "center", size: 5.4 });
+    txt(row[3], 474, y, { align: "center", size: 5.4 });
+  });
+
+  section("4. PROSES REBAGGING", 299);
+  const steps = [
+    "4.1 Naik bahan baku ke Conveyor",
+    "4.2 Penurunan bahan baku dari Conveyor ke Hopper",
+    "4.3 Proses pengisian gula ke dalam Mesin Packing",
+    "4.4 Penimbangan otomatis dan sealing kemasan 1 Kg",
+    "4.5 Packing kemasan primer ke dalam Karton",
+    "4.6 Pelabelan / Pencetakan Exp Date",
+  ];
+  let sy = 308;
+  steps.forEach((label) => {
+    box(L, sy, W, 9, true);
+    txt(label, 20, sy + 6.5, { bold: true });
+    line(L, sy + 9, R, sy + 9);
+    line(L, sy + 18, R, sy + 18);
+    line(L, sy + 27, R, sy + 27);
+    line(301.1, sy + 9, 301.1, sy + 18);
+    line(378.2, sy + 9, 378.2, sy + 27);
+    txt("Mulai jam :", 20, sy + 15.5);
+    txt("Selesai jam :", 304, sy + 15.5);
+    txt("Paraf pelaksana:", 381, sy + 15.5);
+    txt("Pemeriksaan sesuai standar : Ya / Tidak", 20, sy + 24.5);
+    sy += 27;
+  });
+
+  section("5. PENGAWASAN SELAMA PROSES (IN PROCESS CONTROL)", 470);
+  [479, 488, 497, 506, 515, 524].forEach((y) => line(L, y, R, y));
+  [301.1, 378.2].forEach((x) => line(x, 479, x, 524));
+  txt("Parameter", 160, 485.5, { bold: true, align: "center" });
+  txt("Hasil", 339, 485.5, { bold: true, align: "center" });
+  txt("Paraf", 474, 485.5, { bold: true, align: "center" });
+  [
+    "Berat netto sesuai standar (1.000 gram +/- toleransi)",
+    "Seal kemasan rapat",
+    "Kemasan bocor",
+    "Cetakan Exp Date jelas dan terbaca",
+    "Karton dalam kondisi baik",
+  ].forEach((label, i) => txt(label, 20, 494.5 + i * 9));
+
+  section("6. REKONSILIASI HASIL PRODUKSI", 524);
+  line(L, 533, R, 533);
+  line(L, 561, R, 561);
+  [166.7, 339.7, 448.2].forEach((x) => line(x, 533, x, 561));
+  txt("Besaran Batch", 20, 540.5);
+  txt("Jumlah Aktual Produk Jadi", 169, 540.5);
+  txt("Selisih", 342, 540.5);
+  txt("Paraf", 451, 540.5);
+  txt(sourceQty ? sourceQty + " " + sourceUnit : "", 20, 553, { bold: true });
+  txt(finishedQty ? finishedQty + " " + finishedUnit : "", 169, 553, { bold: true });
+  if (Number.isFinite(sourceQty) && Number.isFinite(finishedQty)) {
+    txt(String(finishedQty - sourceQty), 342, 553, { bold: true });
+  }
+
+  section("7. PENYIMPANAN PRODUK JADI", 561);
+  line(L, 570, R, 570);
+  line(L, 604, R, 604);
+  txt("Penyimpanan :", 20, 578);
+  txt(tx.targetStack || "", 82, 578, { bold: true, maxWidth: 470 });
+
+  section("8. VERIFIKASI", 604);
+  line(L, 613, R, 613);
+  line(L, 622, R, 622);
+  line(L, 631, R, 631);
+  line(301.1, 631, 301.1, 720);
+  txt("Diperiksa oleh", 20, 619.5);
+  txt(":", 76, 619.5);
+  txt(supervisor, 84, 619.5, { bold: true });
+  txt("Tanggal", 20, 628.5);
+  txt(":", 76, 628.5);
+  txt(formatPdfDate(tx.productionDate || tx.date), 84, 628.5, { bold: true });
+  txt("PERUM BULOG", 436, 638, { bold: true, align: "center" });
+  txt("(..............................................)", 159, 714, { align: "center" });
+  txt("(IRSA MAULIAN NUGRAHA)", 436, 714, { bold: true, align: "center" });
+
+  const safeBatch = String(tx.batchId || "batch").replace(/[^a-z0-9-_]/gi, "_");
+  pdf.save("Catatan_Proses_Rebagging_" + safeBatch + ".pdf");
+}
+
 // --- APLIKASI UTAMA ---
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
@@ -152,7 +396,8 @@ export default function App() {
 
   const initialFormData = {
     inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inSourceWarehouse: "",
-    rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "", outSkuId: ""
+    rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
+    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(), outSkuId: ""
   };
   const [formData, setFormData] = useState(initialFormData);
   const [outboundSelections, setOutboundSelections] = useState({});
@@ -346,11 +591,14 @@ export default function App() {
           (b) => b.batchId === formData.bulkBatchId
         );
         const targetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
+        const sourceSku = skus.find((s) => s.id === selectedBatch?.skuId);
         const qty = Number(formData.qtyToProcess);
 
         if (!selectedBatch) return alert("Pilih batch bahan baku yang valid.");
         if (!targetSku) return alert("Pilih SKU hasil rebagging.");
         if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas proses harus lebih dari 0.");
+        if (!formData.rebagMoNumber?.trim()) return alert("No. MO wajib diisi untuk dokumen rebagging.");
+        if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
         if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
 
         const sourceBatchRef = doc(
@@ -387,6 +635,11 @@ export default function App() {
               sourceWarehouse: liveBatch.sourceWarehouse || selectedBatch.sourceWarehouse || "",
               targetStack: formData.rebagTargetStack,
               sourceBatchId: selectedBatch.batchId,
+              moNumber: formData.rebagMoNumber.trim(),
+              expiryDate: formData.rebagExpiryDate,
+              productionDate: date,
+              executor: "KOPEL JAYA",
+              supervisor: currentUser.username,
               date,
             }
           );
@@ -402,8 +655,20 @@ export default function App() {
               qtyChange: qty,
               unit: targetSku.unit,
               operator: currentUser.username,
+              supervisor: currentUser.username,
+              executor: "KOPEL JAYA",
+              productionDate: date,
+              expiryDate: formData.rebagExpiryDate,
+              moNumber: formData.rebagMoNumber.trim(),
               targetStack: formData.rebagTargetStack,
+              sourceWarehouse: liveBatch.sourceWarehouse || selectedBatch.sourceWarehouse || "",
               sourceBatchId: selectedBatch.batchId,
+              sourceSkuId: sourceSku?.id || selectedBatch.skuId || "",
+              sourceSkuName: sourceSku?.name || "Gula Curah",
+              sourceQty: qty,
+              sourceUnit: sourceSku?.unit || "KG",
+              finishedQty: qty,
+              finishedUnit: targetSku.unit,
               batchId: newBatchId,
             }
           );
@@ -566,6 +831,25 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Riwayat Transaksi");
     XLSX.writeFile(wb, "Riwayat_Rebagging.xlsx");
+  };
+
+  const handleDownloadRebaggingPdf = async (transaction) => {
+    try {
+      const sourceBatch = inventoryBatches.find((b) => b.batchId === transaction.sourceBatchId);
+      const sourceSku = skus.find((s) => s.id === (transaction.sourceSkuId || sourceBatch?.skuId));
+      await generateRebaggingBatchPdf({
+        ...transaction,
+        sourceWarehouse: transaction.sourceWarehouse || sourceBatch?.sourceWarehouse || "",
+        sourceSkuName: transaction.sourceSkuName || sourceSku?.name || "Gula Curah",
+        sourceUnit: transaction.sourceUnit || sourceSku?.unit || "KG",
+        sourceQty: transaction.sourceQty ?? transaction.qtyChange,
+        finishedQty: transaction.finishedQty ?? transaction.qtyChange,
+        finishedUnit: transaction.finishedUnit || transaction.unit || "Pack",
+      });
+    } catch (error) {
+      console.error("PDF Rebagging Error:", error);
+      alert(`Gagal membuat PDF rebagging: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
+    }
   };
 
   const handleUpdateConfig = async (e) => {
@@ -786,6 +1070,17 @@ export default function App() {
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Asal (Sumber)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Bahan Baku..." /></div>
                         {formData.bulkSkuId && <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch (Berdasarkan Gudang Asal)</label><SearchableSelect options={inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && b.currentQty>0).map(b=>({value:b.batchId, label:`${b.sourceWarehouse} (Sisa Stok: ${b.currentQty})`}))} value={formData.bulkBatchId} onChange={v=>setFormData({...formData, bulkBatchId:v})} placeholder="Pilih Batch yang akan direbagging..." /></div>}
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas yang Diproses</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">No. MO</label>
+                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagMoNumber} onChange={e=>setFormData({...formData, rebagMoNumber:e.target.value})} placeholder="Contoh: 4381.05.2026.09001" required />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Tanggal Kadaluwarsa</label>
+                            <input type="date" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagExpiryDate} onChange={e=>setFormData({...formData, rebagExpiryDate:e.target.value})} required />
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-500 -mt-2">Tanggal produksi dan No. Batch dibuat otomatis saat transaksi disimpan. Tanggal kedaluwarsa otomatis diisi +1 tahun dan tetap dapat diubah.</p>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Target Barang Jadi (Kemasan)</label><SearchableSelect options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.rebagTargetSkuId} onChange={v=>setFormData({...formData, rebagTargetSkuId:v})} placeholder="Pilih SKU Hasil Kemasan..." /></div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Lokasi Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
                       </>
@@ -833,7 +1128,7 @@ export default function App() {
               </div>
               
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
-                <table className="w-full text-sm text-left min-w-[700px]">
+                <table className="w-full text-sm text-left min-w-[820px]">
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
                       <th className="p-4 font-bold whitespace-nowrap">Tanggal & Waktu</th>
@@ -841,6 +1136,7 @@ export default function App() {
                       <th className="p-4 font-bold whitespace-nowrap">Nama Barang Terlibat</th>
                       <th className="p-4 font-bold text-center whitespace-nowrap">Mutasi (Qty)</th>
                       <th className="p-4 font-bold whitespace-nowrap">Petugas</th>
+                      <th className="p-4 font-bold text-center whitespace-nowrap">Dokumen</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -857,6 +1153,20 @@ export default function App() {
                           {t.type === 'OUTBOUND' ? '-' : '+'}{t.qtyChange}
                         </td>
                         <td className="p-4 text-slate-600 capitalize font-medium whitespace-nowrap">{t.operator}</td>
+                        <td className="p-4 text-center whitespace-nowrap">
+                          {t.type === "REBAGGING" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRebaggingPdf(t)}
+                              className="inline-flex items-center gap-2 bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-2 rounded-lg font-bold text-xs"
+                              title="Download Catatan Proses Rebagging Batch"
+                            >
+                              <FileDown size={16}/> PDF Batch
+                            </button>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
