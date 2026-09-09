@@ -1,0 +1,31 @@
+name: One-time Stock Card Template Patch
+
+on:
+  push:
+    paths:
+      - ".github/workflows/patch-stock-card.yml"
+      - ".github/scripts/patch_stock_card_templates.py"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply stock card patch
+        run: python .github/scripts/patch_stock_card_templates.py
+      - name: Commit App changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx
+          if git diff --cached --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git commit -m "Match stock card PDFs to warehouse templates"
+          git push
