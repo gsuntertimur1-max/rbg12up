@@ -181,6 +181,10 @@ const sortBatchesFefoFifo = (batches, referenceDate = new Date()) =>
     const aExpiry = getBatchExpiryInfo(a, referenceDate);
     const bExpiry = getBatchExpiryInfo(b, referenceDate);
 
+    if (aExpiry.isExpired !== bExpiry.isExpired) {
+      return aExpiry.isExpired ? 1 : -1;
+    }
+
     if (aExpiry.hasExpiry && bExpiry.hasExpiry) {
       if (aExpiry.priority !== bExpiry.priority) return aExpiry.priority - bExpiry.priority;
     } else if (aExpiry.hasExpiry !== bExpiry.hasExpiry) {
@@ -1640,6 +1644,56 @@ export default function App() {
             let materialDamageTotal = 0;
             const materialLines = [];
 
+            const referenceDate = new Date(date);
+            const candidateBatches = sortBatchesFefoFifo(
+              inventoryBatches.filter(
+                (batch) =>
+                  batch.skuId === materialSkuId &&
+                  Number(batch.currentQty || 0) > 0
+              ),
+              referenceDate
+            );
+            const usableCandidates = candidateBatches.filter(
+              (batch) => !getBatchExpiryInfo(batch, referenceDate).isExpired
+            );
+            const selectedNonExpiredIds = allocations
+              .map((allocation) =>
+                inventoryBatches.find((batch) => batch.batchId === allocation.batchId)
+              )
+              .filter(
+                (batch) =>
+                  batch && !getBatchExpiryInfo(batch, referenceDate).isExpired
+              )
+              .map((batch) => batch.batchId);
+            const expectedFefoIds = new Set(
+              usableCandidates
+                .slice(0, selectedNonExpiredIds.length)
+                .map((batch) => batch.batchId)
+            );
+            const fefoSkippedIds = selectedNonExpiredIds.filter(
+              (batchId) => !expectedFefoIds.has(batchId)
+            );
+            let materialFefoOverrideReason = "";
+
+            if (fefoSkippedIds.length > 0) {
+              const recommendedText = usableCandidates
+                .slice(0, selectedNonExpiredIds.length)
+                .map((batch) => batch.batchId)
+                .join(", ");
+              const reason = window.prompt(
+                `Pilihan batch ${materialSkuId} melewati urutan FEFO/FIFO.
+
+Rekomendasi: ${recommendedText || "-"}
+Dipilih di luar urutan: ${fefoSkippedIds.join(", ")}
+
+Masukkan alasan override:`
+              );
+              if (!reason || reason.trim().length < 5) {
+                return alert("Alasan override FEFO/FIFO wajib diisi minimal 5 karakter.");
+              }
+              materialFefoOverrideReason = reason.trim();
+            }
+
             for (let allocationIndex = 0; allocationIndex < allocations.length; allocationIndex += 1) {
               const allocation = allocations[allocationIndex];
               const sourceBatch = inventoryBatches.find(
@@ -1680,17 +1734,23 @@ export default function App() {
                 );
               }
 
-              const expiryInfo = getBatchExpiryInfo(sourceBatch, new Date(date));
+              const expiryInfo = getBatchExpiryInfo(sourceBatch, referenceDate);
+              let expiredOverrideReason = "";
               if (expiryInfo.isExpired && !isVerifiedSuperAdmin) {
                 return alert(
                   `Batch ${sourceBatch.batchId} sudah EXPIRED dan tidak dapat digunakan untuk Rebagging.`
                 );
               }
               if (expiryInfo.isExpired && isVerifiedSuperAdmin) {
-                const allowExpired = window.confirm(
-                  `PERINGATAN: Batch ${sourceBatch.batchId} sudah EXPIRED.\n\nLanjutkan sebagai override Super Admin?`
+                const reason = window.prompt(
+                  `PERINGATAN: Batch ${sourceBatch.batchId} sudah EXPIRED.
+
+Masukkan alasan override Super Admin:`
                 );
-                if (!allowExpired) return;
+                if (!reason || reason.trim().length < 5) {
+                  return alert("Alasan override batch expired wajib diisi minimal 5 karakter.");
+                }
+                expiredOverrideReason = reason.trim();
               }
 
               materialUsedTotal += usedQty;
@@ -1717,7 +1777,15 @@ export default function App() {
                 unit: sourceSku?.unit || "",
                 sourceWarehouse: sourceBatch.sourceWarehouse || "",
                 expiryDate: sourceBatch.expiryDate || "",
+                fefoOverride: fefoSkippedIds.includes(sourceBatch.batchId),
+                fefoOverrideReason: fefoSkippedIds.includes(sourceBatch.batchId)
+                  ? materialFefoOverrideReason
+                  : "",
+                fefoOverrideBy: fefoSkippedIds.includes(sourceBatch.batchId)
+                  ? currentUser.username
+                  : "",
                 expiredOverride: expiryInfo.isExpired,
+                expiredOverrideReason,
                 expiredOverrideBy: expiryInfo.isExpired ? currentUser.username : "",
               });
             }
@@ -2119,6 +2187,54 @@ export default function App() {
         if (selections.length === 0) return alert("Isi qty untuk outbound!");
 
         const expiredOutboundItems = [];
+        const outboundReferenceDate = new Date(date);
+        const outboundCandidates = sortBatchesFefoFifo(
+          inventoryBatches.filter(
+            (batch) =>
+              batch.skuId === sku.id &&
+              Number(batch.currentQty || 0) > 0 &&
+              (!isFinishedGoods || batch.resultTmNumber === outboundTm)
+          ),
+          outboundReferenceDate
+        );
+        const usableOutboundCandidates = outboundCandidates.filter(
+          (batch) => !getBatchExpiryInfo(batch, outboundReferenceDate).isExpired
+        );
+        const selectedNonExpiredOutboundIds = selections
+          .filter(
+            (item) =>
+              item.localBatch &&
+              !getBatchExpiryInfo(item.localBatch, outboundReferenceDate).isExpired
+          )
+          .map((item) => item.batchId);
+        const expectedOutboundIds = new Set(
+          usableOutboundCandidates
+            .slice(0, selectedNonExpiredOutboundIds.length)
+            .map((batch) => batch.batchId)
+        );
+        const outboundFefoSkippedIds = selectedNonExpiredOutboundIds.filter(
+          (batchId) => !expectedOutboundIds.has(batchId)
+        );
+        let outboundFefoOverrideReason = "";
+
+        if (outboundFefoSkippedIds.length > 0) {
+          const recommendedText = usableOutboundCandidates
+            .slice(0, selectedNonExpiredOutboundIds.length)
+            .map((batch) => batch.batchId)
+            .join(", ");
+          const reason = window.prompt(
+            `Pilihan Outbound melewati urutan FEFO/FIFO.
+
+Rekomendasi: ${recommendedText || "-"}
+Dipilih di luar urutan: ${outboundFefoSkippedIds.join(", ")}
+
+Masukkan alasan override:`
+          );
+          if (!reason || reason.trim().length < 5) {
+            return alert("Alasan override FEFO/FIFO wajib diisi minimal 5 karakter.");
+          }
+          outboundFefoOverrideReason = reason.trim();
+        }
 
         for (const item of selections) {
           if (!item.localBatch || item.localBatch.skuId !== sku.id) {
@@ -2143,13 +2259,17 @@ export default function App() {
             `Outbound diblokir karena ${expiredOutboundItems.length} batch sudah EXPIRED. Hubungi Super Admin.`
           );
         }
+        let expiredOutboundOverrideReason = "";
         if (expiredOutboundItems.length > 0 && isVerifiedSuperAdmin) {
-          const allowExpiredOutbound = window.confirm(
+          const reason = window.prompt(
             `PERINGATAN: ${expiredOutboundItems.length} batch yang dipilih sudah EXPIRED.
 
-Lanjutkan sebagai override Super Admin?`
+Masukkan alasan override Super Admin:`
           );
-          if (!allowExpiredOutbound) return;
+          if (!reason || reason.trim().length < 5) {
+            return alert("Alasan override batch expired wajib diisi minimal 5 karakter.");
+          }
+          expiredOutboundOverrideReason = reason.trim();
         }
 
         const expiredOutboundIds = new Set(
@@ -2222,7 +2342,17 @@ Lanjutkan sebagai override Super Admin?`
                 tmNumber: isFinishedGoods ? outboundTm : (liveBatch.tmNumber || ""),
                 resultTmNumber: isFinishedGoods ? outboundTm : (liveBatch.resultTmNumber || ""),
                 expiryDate: liveBatch.expiryDate || "",
+                fefoOverride: outboundFefoSkippedIds.includes(item.batchId),
+                fefoOverrideReason: outboundFefoSkippedIds.includes(item.batchId)
+                  ? outboundFefoOverrideReason
+                  : "",
+                fefoOverrideBy: outboundFefoSkippedIds.includes(item.batchId)
+                  ? currentUser.username
+                  : "",
                 expiredOverride: expiredOutboundIds.has(item.batchId),
+                expiredOverrideReason: expiredOutboundIds.has(item.batchId)
+                  ? expiredOutboundOverrideReason
+                  : "",
                 expiredOverrideBy: expiredOutboundIds.has(item.batchId)
                   ? currentUser.username
                   : "",
