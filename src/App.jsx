@@ -966,6 +966,7 @@ export default function App() {
           currentQty: qty,
           sourceWarehouse: formData.inSourceWarehouse.trim(),
           moNumber: formData.inMoNumber?.trim() || "",
+          tmNumber: formData.inTmNumber?.trim() || "",
           date,
           ...auditMeta,
         };
@@ -980,6 +981,7 @@ export default function App() {
           operator: currentUser.username,
           sourceWarehouse: formData.inSourceWarehouse.trim(),
           moNumber: formData.inMoNumber?.trim() || "",
+          tmNumber: formData.inTmNumber?.trim() || "",
           batchId,
           ...auditMeta,
         };
@@ -1360,6 +1362,8 @@ export default function App() {
       "Backdate Oleh": t.backdatedBy || "",
       Tipe: t.type,
       SKU: t.skuName,
+      "No. MO": t.moNumber || "",
+      "No. TM": t.tmNumber || "",
       Qty: t.qtyChange,
       Operator: t.operator
     })));
@@ -1914,6 +1918,7 @@ export default function App() {
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} placeholder="Contoh: 5000" required/></div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">No. MO <span className="font-normal text-slate-400">(untuk kartu persediaan)</span></label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inMoNumber} onChange={e=>setFormData({...formData, inMoNumber:e.target.value})} placeholder="Contoh: MO/4381/05/2026/09001" /></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. TM</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inTmNumber} onChange={e=>setFormData({...formData, inTmNumber:e.target.value})} placeholder="Contoh: TM/4381/05/2026/09001" /></div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
                       </>
                     )}
