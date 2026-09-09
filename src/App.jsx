@@ -2769,6 +2769,7 @@ export default function App() {
           <button onClick={()=>handleNavClick("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
           {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
           <button onClick={()=>handleNavClick("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
+          <button onClick={()=>handleNavClick("reports")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="reports"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><ClipboardList size={18}/> Laporan Produksi</button>
           {hasAccess(["Super Admin"]) && <button onClick={()=>handleNavClick("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
         </nav>
         
@@ -2878,6 +2879,31 @@ export default function App() {
                       const process = batches.reduce((acc, b) => acc + Number(b.processQty || 0), 0);
                       const damage = batches.reduce((acc, b) => acc + Number(b.damageQty || 0), 0);
                       const total = activeInvTab === 'rebagged' ? good + process + damage : good;
+                      const goodKg = activeInvTab === 'rebagged'
+                        ? batches.reduce((acc,b)=>{
+                            const weight=Number(b.weightPerPackKg)||inferWeightPerPackKg(sku)||0;
+                            return acc + (Number.isFinite(Number(b.goodKg)) && Number(b.goodKg)>0
+                              ? Number(b.goodKg)
+                              : Number(b.currentQty||0)*weight);
+                          },0)
+                        : 0;
+                      const processKg = activeInvTab === 'rebagged'
+                        ? batches.reduce((acc,b)=>{
+                            const weight=Number(b.weightPerPackKg)||inferWeightPerPackKg(sku)||0;
+                            return acc + (Number.isFinite(Number(b.processKg)) && Number(b.processKg)>0
+                              ? Number(b.processKg)
+                              : Number(b.processQty||0)*weight);
+                          },0)
+                        : 0;
+                      const damageKg = activeInvTab === 'rebagged'
+                        ? batches.reduce((acc,b)=>{
+                            const weight=Number(b.weightPerPackKg)||inferWeightPerPackKg(sku)||0;
+                            return acc + (Number.isFinite(Number(b.damageKg)) && Number(b.damageKg)>0
+                              ? Number(b.damageKg)
+                              : Number(b.damageQty||0)*weight);
+                          },0)
+                        : 0;
+                      const totalKg = goodKg + processKg + damageKg;
                       const sources = [...new Set(batches.map(b=>b.sourceWarehouse).filter(Boolean))].join(", ") || "-";
                       return (
                         <tr key={sku.id} className="hover:bg-slate-50 transition-colors">
@@ -2886,10 +2912,22 @@ export default function App() {
                           <td className="p-4 text-slate-600">{sources}</td>
                           {activeInvTab === 'rebagged' ? (
                             <>
-                              <td className="p-4 text-right font-black text-green-700 text-base">{good} <span className="font-medium text-slate-400 text-xs">{sku.unit}</span></td>
-                              <td className="p-4 text-right font-black text-amber-700 text-base">{process} <span className="font-medium text-slate-400 text-xs">{sku.unit}</span></td>
-                              <td className="p-4 text-right font-black text-red-700 text-base">{damage} <span className="font-medium text-slate-400 text-xs">{sku.unit}</span></td>
-                              <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
+                              <td className="p-4 text-right">
+                                <div className="font-black text-green-700 text-base">{good} <span className="font-medium text-slate-400 text-xs">Pack</span></div>
+                                <div className="mt-1 text-[10px] font-bold text-slate-400">{goodKg.toLocaleString('id-ID')} Kg</div>
+                              </td>
+                              <td className="p-4 text-right">
+                                <div className="font-black text-amber-700 text-base">{process} <span className="font-medium text-slate-400 text-xs">Pack</span></div>
+                                <div className="mt-1 text-[10px] font-bold text-slate-400">{processKg.toLocaleString('id-ID')} Kg</div>
+                              </td>
+                              <td className="p-4 text-right">
+                                <div className="font-black text-red-700 text-base">{damage} <span className="font-medium text-slate-400 text-xs">Pack</span></div>
+                                <div className="mt-1 text-[10px] font-bold text-slate-400">{damageKg.toLocaleString('id-ID')} Kg</div>
+                              </td>
+                              <td className="p-4 text-right">
+                                <div className="font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">Pack</span></div>
+                                <div className="mt-1 text-[10px] font-black text-slate-500">{totalKg.toLocaleString('id-ID')} Kg</div>
+                              </td>
                             </>
                           ) : (
                             <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
@@ -3136,7 +3174,18 @@ export default function App() {
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas Hasil yang Diproses</label>
                           <input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData,qtyToProcess:e.target.value})} placeholder="0" required/>
-                          <p className="mt-1.5 text-xs text-slate-500">Jumlah ini menjadi dasar perhitungan otomatis bahan kemasan yang memakai standar isi.</p>
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            <span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-bold text-slate-600">
+                              Output: {Number(formData.qtyToProcess||0).toLocaleString('id-ID')} Pack
+                            </span>
+                            <span className="rounded-lg bg-blue-50 px-2.5 py-1.5 font-bold text-blue-700">
+                              Netto: {(getOutputNetWeightKg(selectedRebagTargetSku, Number(formData.qtyToProcess||0)) ?? 0).toLocaleString('id-ID')} Kg
+                            </span>
+                            <span className="rounded-lg bg-violet-50 px-2.5 py-1.5 font-bold text-violet-700">
+                              Berat/Pack: {inferWeightPerPackKg(selectedRebagTargetSku) || '-'} Kg
+                            </span>
+                          </div>
+                          <p className="mt-1.5 text-xs text-slate-500">Jumlah Pack menjadi dasar perhitungan otomatis bahan kemasan yang memakai standar isi.</p>
                         </div>
 
                         {activeRebagRecipe && (
@@ -3301,7 +3350,7 @@ export default function App() {
                             placeholder="Masukkan TM hasil produksi"
                             required
                           />
-                          <p className="mt-2 text-xs text-green-700">TM Hasil dibuat pada proses Rebagging dan menjadi referensi utama produk jadi saat Outbound.</p>
+                          <p className="mt-2 text-xs text-green-700">TM Hasil dibuat pada proses Rebagging, menjadi referensi utama Outbound, dan harus unik untuk setiap produksi.</p>
                         </div>
 
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
@@ -3320,6 +3369,48 @@ export default function App() {
                               {Number(formData.rebagGoodQty||0)+Number(formData.rebagProcessQty||0)+Number(formData.rebagDamageQty||0)} / {Number(formData.qtyToProcess||0)}
                             </span>
                           </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 sm:p-5">
+                          {(()=>{
+                            const weightPerPackKg=inferWeightPerPackKg(selectedRebagTargetSku)||0;
+                            const outputPack=Number(formData.qtyToProcess||0);
+                            const goodPack=Number(formData.rebagGoodQty||0);
+                            const processPack=Number(formData.rebagProcessQty||0);
+                            const damagePack=Number(formData.rebagDamageQty||0);
+                            const resultPack=goodPack+processPack+damagePack;
+                            const balanced=outputPack>0 && Math.abs(resultPack-outputPack)<0.0001;
+                            return (
+                              <>
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                  <div>
+                                    <div className="text-xs font-black uppercase tracking-[0.14em] text-indigo-500">Rekonsiliasi Produksi</div>
+                                    <h4 className="mt-1 font-black text-slate-900">Pack dan Berat Netto</h4>
+                                  </div>
+                                  <span className={`rounded-full px-3 py-1.5 text-xs font-black ${balanced?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>
+                                    {balanced?'SEIMBANG':'BELUM SEIMBANG'}
+                                  </span>
+                                </div>
+                                <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                  {[
+                                    ['OUTPUT',outputPack,outputPack*weightPerPackKg,'text-slate-800'],
+                                    ['GOOD',goodPack,goodPack*weightPerPackKg,'text-green-700'],
+                                    ['PROCESS',processPack,processPack*weightPerPackKg,'text-amber-700'],
+                                    ['DAMAGE',damagePack,damagePack*weightPerPackKg,'text-red-700'],
+                                  ].map(([label,pack,kg,cls])=>(
+                                    <div key={label} className="rounded-xl border border-white bg-white p-3 shadow-sm">
+                                      <div className="text-[10px] font-black text-slate-400">{label}</div>
+                                      <div className={`mt-1 text-lg font-black ${cls}`}>{Number(pack).toLocaleString('id-ID')} Pack</div>
+                                      <div className="mt-1 text-xs font-bold text-slate-500">{Number(kg).toLocaleString('id-ID')} Kg</div>
+                                    </div>
+                                  ))}
+                                </div>
+                                <p className="mt-3 text-xs leading-5 text-indigo-700">
+                                  Kerusakan bahan kemasan dicatat per SKU dan satuan masing-masing; kardus, plastik, dan bahan dalam KG tidak dijumlahkan menjadi satu angka.
+                                </p>
+                              </>
+                            );
+                          })()}
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -3548,13 +3639,18 @@ export default function App() {
                           )}
                         </td>
                         <td className="p-4 text-center">
-                          <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                          <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : t.type === 'MATERIAL_DAMAGE' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
                             {t.type}
                           </span>
                         </td>
                         <td className="p-4 font-bold text-slate-800 min-w-[200px]">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
                         <td className="p-4 text-center font-black whitespace-nowrap">
-                          {t.type === 'PROCESS_TO_DAMAGE' ? (
+                          {t.type === 'MATERIAL_DAMAGE' ? (
+                            <div>
+                              <div className="text-red-600">-{t.damageQty ?? t.qtyChange} {t.unit}</div>
+                              <div className="mt-1 text-[10px] font-bold text-red-400">KERUSAKAN BAHAN</div>
+                            </div>
+                          ) : t.type === 'PROCESS_TO_DAMAGE' ? (
                             <div>
                               <div className="text-red-600">PROCESS → DAMAGE</div>
                               <div className="text-xs text-slate-500 mt-1">{t.resolutionQty} {t.unit}</div>
@@ -3570,11 +3666,14 @@ export default function App() {
                               <div className="text-[10px] text-slate-500 mt-1">
                                 G:{t.goodQty ?? t.qtyChange} · P:{t.processQty ?? 0} · D:{t.damageQty ?? 0}
                               </div>
-                              {Number(t.materialDamageTotal || 0) > 0 && (
+                              {Number(t.materialDamageLineCount || 0) > 0 && (
                                 <div className="mt-1 text-[10px] font-bold text-red-500">
-                                  Bahan rusak: {t.materialDamageTotal}
+                                  Bahan rusak: {t.materialDamageLineCount} jenis
                                 </div>
                               )}
+                              <div className="mt-1 text-[10px] font-bold text-blue-500">
+                                {Number(t.netWeightKg || 0).toLocaleString('id-ID')} Kg · Komposisi v{t.recipeVersion || 1}
+                              </div>
                             </div>
                           ) : (
                             <span className={`text-lg ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
@@ -3649,7 +3748,18 @@ export default function App() {
               </div>
               
               {activeTabSettings === 'system' && (
-                <form onSubmit={handleUpdateConfig} className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200 max-w-xl space-y-6">
+                <form onSubmit={handleUpdateConfig} className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200 max-w-2xl space-y-6">
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <ShieldAlert size={20} className="mt-0.5 shrink-0 text-amber-600"/>
+                      <div>
+                        <div className="text-sm font-black text-amber-900">Pengingat Tahap Keamanan Berikutnya</div>
+                        <p className="mt-1 text-xs leading-5 text-amber-800">
+                          Setelah alur operasional stabil, migrasikan login ke Firebase Authentication dan pasang Firestore Security Rules/role server-side. Hak akses saat ini masih terutama dikendalikan dari sisi aplikasi.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                   <div><label className="block font-bold text-slate-700 mb-2">Nama Aplikasi</label><input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.name} onChange={e=>setSystemConfig({...systemConfig, name: e.target.value})} /></div>
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">URL Logo (Opsional)</label>
@@ -3685,6 +3795,21 @@ export default function App() {
                         </select>
                       </div>
                     </div>
+                    {newSku.type === 'rebagged' && (
+                      <div>
+                        <label className="block text-sm font-bold mb-2 text-slate-700">Berat Netto per Pack (Kg)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.001"
+                          className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-red-500"
+                          value={newSku.weightPerPackKg}
+                          onChange={e=>setNewSku({...newSku,weightPerPackKg:e.target.value})}
+                          placeholder={inferWeightPerPackKg(newSku) ? `Terdeteksi dari nama: ${inferWeightPerPackKg(newSku)} Kg` : "Contoh: 1 atau 5"}
+                        />
+                        <p className="mt-1.5 text-xs text-slate-500">Dipakai untuk memisahkan jumlah Pack/PCS dan berat Kg pada stok, produksi, dan outbound.</p>
+                      </div>
+                    )}
                     <button type="submit" className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg hover:bg-slate-900 transition-colors shadow-md mt-2">Simpan SKU Baru</button>
                   </form>
 
