@@ -2555,8 +2555,13 @@ export default function App() {
                                   Setiap bahan boleh berasal dari gudang, MO, dan TM yang berbeda. MO/TM mengikuti batch yang dipilih.
                                 </p>
                                 <div className="mt-3 flex flex-wrap gap-2">
-                                  {activeRebagRecipe.materials.map((skuId)=>(
-                                    <span key={skuId} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">{skuId}</span>
+                                  {activeRebagMaterials.map((item)=>(
+                                    <span key={item.skuId} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">
+                                      {item.skuId}
+                                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black ${item.required ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                        {item.required ? 'WAJIB' : 'OPSIONAL'}
+                                      </span>
+                                    </span>
                                   ))}
                                 </div>
                               </div>
@@ -2569,7 +2574,8 @@ export default function App() {
                         {activeRebagRecipe && (
                           <div className="space-y-3">
                             <h4 className="font-black text-slate-800">Pilih Batch Bahan</h4>
-                            {activeRebagRecipe.materials.map((materialSkuId)=>{
+                            {activeRebagMaterials.map((recipeMaterial)=>{
+                              const materialSkuId=recipeMaterial.skuId;
                               const materialSku=skus.find(s=>s.id===materialSkuId);
                               const selection=rebagMaterialSelections[materialSkuId]||{};
                               const batchOptions=inventoryBatches.filter(
@@ -2577,10 +2583,15 @@ export default function App() {
                               );
                               const selectedBatch=batchOptions.find(b=>b.batchId===selection.batchId);
                               return (
-                                <div key={materialSkuId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                  <div className="mb-3">
-                                    <div className="font-mono text-xs font-black text-red-600">{materialSkuId}</div>
-                                    <div className="font-bold text-slate-800">{materialSku?.name || 'SKU belum ada di master'}</div>
+                                <div key={materialSkuId} className={`rounded-2xl border bg-white p-4 shadow-sm ${recipeMaterial.required ? 'border-slate-200' : 'border-blue-200'}`}>
+                                  <div className="mb-3 flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="font-mono text-xs font-black text-red-600">{materialSkuId}</div>
+                                      <div className="font-bold text-slate-800">{materialSku?.name || 'SKU belum ada di master'}</div>
+                                    </div>
+                                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${recipeMaterial.required ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                      {recipeMaterial.required ? 'WAJIB' : 'OPSIONAL'}
+                                    </span>
                                   </div>
                                   <div className="grid grid-cols-1 sm:grid-cols-[1.5fr_0.5fr] gap-3">
                                     <select
@@ -2590,9 +2601,9 @@ export default function App() {
                                         ...prev,
                                         [materialSkuId]: {...(prev[materialSkuId]||{}),batchId:e.target.value}
                                       }))}
-                                      required
+                                      required={recipeMaterial.required}
                                     >
-                                      <option value="">-- Pilih Batch Bahan --</option>
+                                      <option value="">-- {recipeMaterial.required ? 'Pilih Batch Bahan' : 'Opsional / tidak digunakan'} --</option>
                                       {batchOptions.map(b=>(
                                         <option key={b.batchId} value={b.batchId}>
                                           {b.sourceWarehouse||'-'} · MO: {b.moNumber||'-'} · TM: {b.tmNumber||'-'} · Stok: {b.currentQty}
@@ -2610,7 +2621,8 @@ export default function App() {
                                         [materialSkuId]: {...(prev[materialSkuId]||{}),qty:e.target.value}
                                       }))}
                                       placeholder="Qty pakai"
-                                      required
+                                      required={recipeMaterial.required}
+                                      disabled={!recipeMaterial.required && !selection.batchId}
                                     />
                                   </div>
                                   {selectedBatch && (
@@ -2991,6 +3003,12 @@ export default function App() {
                     <Database size={17}/> Database SKU
                   </button>
                   <button
+                    onClick={()=>setActiveTabSettings('recipes')}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='recipes'?'bg-slate-900 text-white shadow-lg':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                  >
+                    <Boxes size={17}/> Komposisi Rebagging
+                  </button>
+                  <button
                     onClick={()=>setActiveTabSettings('users')}
                     className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='users'?'bg-slate-900 text-white shadow-lg':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                   >
@@ -3055,6 +3073,226 @@ export default function App() {
                       Pilih File Excel Anda
                       <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
                     </label>
+                  </div>
+                </div>
+              )}
+
+              {activeTabSettings === 'recipes' && isVerifiedSuperAdmin && (
+                <div className="grid grid-cols-1 xl:grid-cols-[0.95fr_1.35fr] gap-6 items-start">
+                  <form onSubmit={handleSaveRecipe} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-6 space-y-5">
+                    <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-[0.14em] text-red-500">Master Produksi</div>
+                        <h3 className="mt-1 text-xl font-black text-slate-900">
+                          {editingRecipeId ? "Edit Komposisi" : "Tambah Komposisi"}
+                        </h3>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          Operator akan membaca komposisi aktif ini secara otomatis pada proses Rebagging.
+                        </p>
+                      </div>
+                      {editingRecipeId && (
+                        <button
+                          type="button"
+                          onClick={resetRecipeForm}
+                          className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                        >
+                          Batal Edit
+                        </button>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">SKU Produk Jadi</label>
+                      <SearchableSelect
+                        options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
+                        value={recipeForm.targetSku}
+                        onChange={v=>{
+                          const product=skus.find(s=>s.id===v);
+                          setRecipeForm(prev=>({
+                            ...prev,
+                            targetSku:v,
+                            label:prev.label || product?.name || ""
+                          }));
+                        }}
+                        placeholder="Pilih produk jadi..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">Nama Komposisi</label>
+                      <input
+                        type="text"
+                        className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500"
+                        value={recipeForm.label}
+                        onChange={e=>setRecipeForm({...recipeForm,label:e.target.value})}
+                        placeholder="Contoh: Fortivit 1 Kg"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <label className="block text-sm font-black text-slate-800">Daftar Bahan</label>
+                          <p className="text-xs text-slate-500 mt-1">Urutan di bawah ini menjadi urutan bahan pada form operator.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={addRecipeMaterialLine}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-black"
+                        >
+                          <PlusCircle size={15}/> Tambah
+                        </button>
+                      </div>
+
+                      {recipeForm.materials.map((item,index)=>(
+                        <div key={item.rowId} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 mb-1.5">Bahan {index+1}</label>
+                              <SearchableSelect
+                                options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
+                                value={item.skuId}
+                                onChange={v=>updateRecipeMaterialLine(item.rowId,'skuId',v)}
+                                placeholder="Pilih SKU bahan..."
+                              />
+                            </div>
+                            <label className="flex h-[46px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={item.required !== false}
+                                onChange={e=>updateRecipeMaterialLine(item.rowId,'required',e.target.checked)}
+                                className="h-4 w-4 accent-red-600"
+                              />
+                              Wajib
+                            </label>
+                            <button
+                              type="button"
+                              onClick={()=>removeRecipeMaterialLine(item.rowId)}
+                              className="flex h-[46px] items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 text-red-600 hover:bg-red-100"
+                              title="Hapus bahan"
+                            >
+                              <Trash2 size={17}/>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">Catatan <span className="font-normal text-slate-400">(opsional)</span></label>
+                      <textarea
+                        className="w-full min-h-24 border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500 resize-y"
+                        value={recipeForm.notes}
+                        onChange={e=>setRecipeForm({...recipeForm,notes:e.target.value})}
+                        placeholder="Catatan penggunaan komposisi..."
+                      />
+                    </div>
+
+                    <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 cursor-pointer">
+                      <div>
+                        <div className="text-sm font-black text-slate-800">Status Komposisi</div>
+                        <div className="text-xs text-slate-500 mt-1">Hanya komposisi aktif yang digunakan Operator.</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={recipeForm.active !== false}
+                          onChange={e=>setRecipeForm({...recipeForm,active:e.target.checked})}
+                          className="h-5 w-5 accent-green-600"
+                        />
+                        <span className={`text-xs font-black ${recipeForm.active !== false ? 'text-green-600' : 'text-slate-400'}`}>
+                          {recipeForm.active !== false ? "AKTIF" : "NONAKTIF"}
+                        </span>
+                      </div>
+                    </label>
+
+                    <button
+                      type="submit"
+                      className="w-full rounded-xl bg-red-600 py-3.5 text-sm font-black text-white shadow-lg shadow-red-100 hover:bg-red-700"
+                    >
+                      {editingRecipeId ? "Simpan Perubahan Komposisi" : "Simpan Komposisi Baru"}
+                    </button>
+                  </form>
+
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-xl font-black text-slate-900">Daftar Komposisi</h3>
+                          <p className="mt-1 text-sm text-slate-500">{rebagRecipes.length} komposisi tersimpan di Firestore.</p>
+                        </div>
+                        <div className="rounded-xl bg-green-50 px-4 py-2 text-xs font-black text-green-700">
+                          {rebagRecipes.filter(r=>r.active!==false).length} AKTIF
+                        </div>
+                      </div>
+                    </div>
+
+                    {rebagRecipes.map(recipe=>{
+                      const product=skus.find(s=>s.id===recipe.targetSku);
+                      const materials=normalizeRecipeMaterials(recipe);
+                      return (
+                        <div key={recipe.id} className={`rounded-2xl border bg-white p-5 shadow-sm ${recipe.active!==false?'border-slate-200':'border-slate-200 opacity-70'}`}>
+                          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="text-lg font-black text-slate-900">{recipe.label}</h4>
+                                <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${recipe.active!==false?'bg-green-50 text-green-700':'bg-slate-100 text-slate-500'}`}>
+                                  {recipe.active!==false?'AKTIF':'NONAKTIF'}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-sm font-mono text-slate-500">
+                                {recipe.targetSku || (recipe.matchName ? `Deteksi nama: ${recipe.matchName}` : "Belum memilih produk jadi")}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-600">{product?.name || (recipe.targetSku ? "SKU produk jadi belum ada di master" : "")}</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={()=>handleEditRecipe(recipe)}
+                                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={()=>handleDeleteRecipe(recipe)}
+                                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-100"
+                              >
+                                Hapus
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {materials.map(item=>{
+                              const materialSku=skus.find(s=>s.id===item.skuId);
+                              return (
+                                <div key={item.skuId} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono text-xs font-black text-slate-700">{item.skuId}</span>
+                                    <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black ${item.required?'bg-red-100 text-red-600':'bg-blue-100 text-blue-600'}`}>
+                                      {item.required?'WAJIB':'OPSIONAL'}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 max-w-56 truncate text-[11px] text-slate-500">{materialSku?.name || "SKU belum ada di master"}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {recipe.notes && (
+                            <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">{recipe.notes}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {rebagRecipes.length===0 && (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+                        Belum ada Master Komposisi.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
