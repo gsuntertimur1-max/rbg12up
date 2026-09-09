@@ -1449,6 +1449,10 @@ export default function App() {
         const txId = `TRX-${timestamp}`;
         const sourceMoNumbers = [...new Set(selectedMaterials.map((m) => m.moNumber).filter(Boolean))];
         const sourceTmNumbers = [...new Set(selectedMaterials.map((m) => m.tmNumber).filter(Boolean))];
+        const materialDamageTotal = selectedMaterials.reduce(
+          (sum, material) => sum + Number(material.damageQty || 0),
+          0
+        );
 
         await runTransaction(db, async (transaction) => {
           const materialRefs = selectedMaterials.map((material) =>
@@ -1498,6 +1502,7 @@ export default function App() {
             sourceBatchId: primaryMaterial?.batchId || "",
             sourceBatchIds: selectedMaterials.map((m) => m.batchId),
             materials: selectedMaterials,
+            materialDamageTotal,
             moNumber: sourceMoNumbers.join(", "),
             sourceMoNumbers,
             sourceTmNumbers,
@@ -1547,6 +1552,7 @@ export default function App() {
               sourceQty: primaryMaterial?.qty || 0,
               sourceUnit: primaryMaterial?.unit || "",
               materials: selectedMaterials,
+              materialDamageTotal,
               finishedQty: goodQty,
               finishedUnit: targetSku.unit,
               batchId: newBatchId,
@@ -2672,6 +2678,11 @@ export default function App() {
                                       <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black ${item.required ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
                                         {item.required ? 'WAJIB' : 'OPSIONAL'}
                                       </span>
+                                      {item.calculationMode === 'per_output' && (
+                                        <span className="rounded-full bg-green-50 px-1.5 py-0.5 text-[9px] font-black text-green-700">
+                                          AUTO 1/{item.outputPerUnit}
+                                        </span>
+                                      )}
                                     </span>
                                   ))}
                                 </div>
@@ -2693,6 +2704,12 @@ export default function App() {
                                 b=>b.skuId===materialSkuId && Number(b.currentQty||0)>0
                               );
                               const selectedBatch=batchOptions.find(b=>b.batchId===selection.batchId);
+                              const calculatedUsage=getCalculatedMaterialQty(recipeMaterial, formData.qtyToProcess);
+                              const usedQty=recipeMaterial.calculationMode==='per_output'
+                                ? Number(calculatedUsage||0)
+                                : Number(selection.qty||0);
+                              const materialDamageQty=Number(selection.damageQty||0);
+                              const totalMaterialOut=usedQty+materialDamageQty;
                               return (
                                 <div key={materialSkuId} className={`rounded-2xl border bg-white p-4 shadow-sm ${recipeMaterial.required ? 'border-slate-200' : 'border-blue-200'}`}>
                                   <div className="mb-3 flex items-start justify-between gap-3">
@@ -2700,11 +2717,19 @@ export default function App() {
                                       <div className="font-mono text-xs font-black text-red-600">{materialSkuId}</div>
                                       <div className="font-bold text-slate-800">{materialSku?.name || 'SKU belum ada di master'}</div>
                                     </div>
-                                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${recipeMaterial.required ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
-                                      {recipeMaterial.required ? 'WAJIB' : 'OPSIONAL'}
-                                    </span>
+                                    <div className="flex flex-wrap justify-end gap-1.5">
+                                      {recipeMaterial.calculationMode === 'per_output' && (
+                                        <span className="rounded-full bg-green-50 px-2.5 py-1 text-[10px] font-black text-green-700">
+                                          AUTO · 1/{recipeMaterial.outputPerUnit}
+                                        </span>
+                                      )}
+                                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${recipeMaterial.required ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                        {recipeMaterial.required ? 'WAJIB' : 'OPSIONAL'}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-[1.5fr_0.5fr] gap-3">
+                                  <div>
+                                    <label className="mb-1.5 block text-xs font-bold text-slate-500">Batch / MO / TM Bahan</label>
                                     <select
                                       className="w-full p-3 border border-slate-300 rounded-lg bg-white outline-none focus:border-red-500 text-sm"
                                       value={selection.batchId||''}
@@ -2721,20 +2746,61 @@ export default function App() {
                                         </option>
                                       ))}
                                     </select>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max={selectedBatch?.currentQty||undefined}
-                                      className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 font-bold"
-                                      value={selection.qty||''}
-                                      onChange={e=>setRebagMaterialSelections(prev=>({
-                                        ...prev,
-                                        [materialSkuId]: {...(prev[materialSkuId]||{}),qty:e.target.value}
-                                      }))}
-                                      placeholder="Qty pakai"
-                                      required={recipeMaterial.required}
-                                      disabled={!recipeMaterial.required && !selection.batchId}
-                                    />
+                                  </div>
+
+                                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    <div>
+                                      <label className="mb-1.5 block text-xs font-bold text-slate-500">
+                                        {recipeMaterial.calculationMode === 'per_output' ? 'Kebutuhan Standar' : 'Qty Dipakai Baik'}
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max={selectedBatch?.currentQty||undefined}
+                                        readOnly={recipeMaterial.calculationMode === 'per_output'}
+                                        className={`w-full p-3 border rounded-lg outline-none font-bold ${recipeMaterial.calculationMode === 'per_output' ? 'border-green-200 bg-green-50 text-green-800' : 'border-slate-300 bg-white focus:border-red-500'}`}
+                                        value={recipeMaterial.calculationMode === 'per_output' ? calculatedUsage : (selection.qty||'')}
+                                        onChange={e=>setRebagMaterialSelections(prev=>({
+                                          ...prev,
+                                          [materialSkuId]: {...(prev[materialSkuId]||{}),qty:e.target.value}
+                                        }))}
+                                        placeholder="0"
+                                        required={recipeMaterial.required}
+                                        disabled={!recipeMaterial.required && !selection.batchId}
+                                      />
+                                      {recipeMaterial.calculationMode === 'per_output' && (
+                                        <p className="mt-1 text-[10px] text-green-700">
+                                          ceil({Number(formData.qtyToProcess||0)} ÷ {recipeMaterial.outputPerUnit}) = {calculatedUsage}
+                                        </p>
+                                      )}
+                                    </div>
+
+                                    <div>
+                                      <label className="mb-1.5 block text-xs font-bold text-red-600">Qty Rusak</label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max={selectedBatch ? Math.max(0, Number(selectedBatch.currentQty||0)-usedQty) : undefined}
+                                        className="w-full p-3 border border-red-200 rounded-lg bg-red-50/50 outline-none focus:border-red-500 font-bold text-red-700"
+                                        value={selection.damageQty||''}
+                                        onChange={e=>setRebagMaterialSelections(prev=>({
+                                          ...prev,
+                                          [materialSkuId]: {...(prev[materialSkuId]||{}),damageQty:e.target.value}
+                                        }))}
+                                        placeholder="0"
+                                        disabled={!selection.batchId}
+                                      />
+                                      <p className="mt-1 text-[10px] text-slate-400">Kerusakan bahan saat proses.</p>
+                                    </div>
+
+                                    <div>
+                                      <label className="mb-1.5 block text-xs font-bold text-slate-500">Total Stok Berkurang</label>
+                                      <div className="flex min-h-[46px] items-center justify-between rounded-lg border border-slate-200 bg-slate-100 px-3">
+                                        <span className="text-sm font-black text-slate-800">{totalMaterialOut}</span>
+                                        <span className="text-xs font-bold text-slate-400">{materialSku?.unit || ''}</span>
+                                      </div>
+                                      <p className="mt-1 text-[10px] text-slate-400">Dipakai + rusak.</p>
+                                    </div>
                                   </div>
                                   {selectedBatch && (
                                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
@@ -3257,7 +3323,7 @@ export default function App() {
                       </div>
 
                       {recipeForm.materials.map((item,index)=>(
-                        <div key={item.rowId} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <div key={item.rowId} className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
                           <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
                             <div>
                               <label className="block text-xs font-bold text-slate-500 mb-1.5">Bahan {index+1}</label>
@@ -3285,6 +3351,46 @@ export default function App() {
                             >
                               <Trash2 size={17}/>
                             </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 mb-1.5">Perhitungan Pemakaian</label>
+                              <select
+                                className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-red-500 text-sm"
+                                value={item.calculationMode || 'manual'}
+                                onChange={e=>{
+                                  updateRecipeMaterialLine(item.rowId,'calculationMode',e.target.value);
+                                  if(e.target.value==='manual') updateRecipeMaterialLine(item.rowId,'outputPerUnit','');
+                                }}
+                              >
+                                <option value="manual">Manual — Operator isi Qty</option>
+                                <option value="per_output">Otomatis — Berdasarkan Qty Hasil</option>
+                              </select>
+                            </div>
+
+                            {item.calculationMode === 'per_output' ? (
+                              <div>
+                                <label className="block text-xs font-bold text-green-700 mb-1.5">Isi Produk per 1 Bahan</label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  className="w-full border border-green-300 bg-green-50 p-2.5 rounded-lg outline-none focus:border-green-600 font-bold text-green-800"
+                                  value={item.outputPerUnit || ''}
+                                  onChange={e=>updateRecipeMaterialLine(item.rowId,'outputPerUnit',e.target.value)}
+                                  placeholder="Contoh: 24"
+                                  required
+                                />
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  <button type="button" onClick={()=>updateRecipeMaterialLine(item.rowId,'outputPerUnit','24')} className="rounded-md bg-white border border-green-200 px-2 py-1 text-[10px] font-bold text-green-700">24 · Gula 1 kg</button>
+                                  <button type="button" onClick={()=>updateRecipeMaterialLine(item.rowId,'outputPerUnit','20')} className="rounded-md bg-white border border-green-200 px-2 py-1 text-[10px] font-bold text-green-700">20 · Fortivit 1 kg</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs leading-5 text-slate-500">
+                                Operator mengisi pemakaian aktual. Qty rusak tetap dicatat terpisah saat Rebagging.
+                              </div>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -3385,6 +3491,11 @@ export default function App() {
                                     <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black ${item.required?'bg-red-100 text-red-600':'bg-blue-100 text-blue-600'}`}>
                                       {item.required?'WAJIB':'OPSIONAL'}
                                     </span>
+                                    {item.calculationMode === 'per_output' && (
+                                      <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[9px] font-black text-green-700">
+                                        AUTO 1/{item.outputPerUnit}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="mt-1 max-w-56 truncate text-[11px] text-slate-500">{materialSku?.name || "SKU belum ada di master"}</div>
                                 </div>
