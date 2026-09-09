@@ -115,6 +115,20 @@ function getDefaultExpiryDate() {
   return d.toISOString().slice(0, 10);
 }
 
+function getLocalDateTimeInput(date = new Date()) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function getExpiryDateFromLocalDateTime(value) {
+  if (!value) return getDefaultExpiryDate();
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return getDefaultExpiryDate();
+  d.setFullYear(d.getFullYear() + 1);
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
 function formatPdfDate(value) {
   if (!value) return "";
   const d = new Date(value);
@@ -719,7 +733,8 @@ export default function App() {
   const initialFormData = {
     inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inSourceWarehouse: "",
     rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
-    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(), outSkuId: "", outSoNumber: "", outCustomer: ""
+    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(), outSkuId: "", outSoNumber: "", outCustomer: "",
+    useBackdate: false, backdateDateTime: ""
   };
   const [formData, setFormData] = useState(initialFormData);
   const [outboundSelections, setOutboundSelections] = useState({});
@@ -830,6 +845,22 @@ export default function App() {
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
+  const isVerifiedSuperAdmin = Boolean(
+    currentUser?.role === "Super Admin" &&
+    users.some(
+      (u) => u.username === currentUser.username && u.role === "Super Admin"
+    )
+  );
+
+  const handleBackdateDateTimeChange = (value) => {
+    setFormData((prev) => {
+      const next = { ...prev, backdateDateTime: value };
+      if (activeOpTab === "rebagging" && value) {
+        next.rebagExpiryDate = getExpiryDateFromLocalDateTime(value);
+      }
+      return next;
+    });
+  };
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -864,7 +895,34 @@ export default function App() {
     if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
 
     const timestamp = Date.now();
-    const date = new Date(timestamp).toISOString();
+    const recordedAt = new Date(timestamp).toISOString();
+    const backdateRequested = Boolean(formData.useBackdate);
+
+    if (backdateRequested && !isVerifiedSuperAdmin) {
+      return alert("Akses backdate hanya tersedia untuk Super Admin yang terverifikasi.");
+    }
+
+    let date = recordedAt;
+    if (backdateRequested) {
+      if (!formData.backdateDateTime) {
+        return alert("Pilih tanggal dan waktu backdate terlebih dahulu.");
+      }
+
+      const selectedDate = new Date(formData.backdateDateTime);
+      if (Number.isNaN(selectedDate.getTime())) {
+        return alert("Tanggal backdate tidak valid.");
+      }
+      if (selectedDate.getTime() > timestamp + 60000) {
+        return alert("Tanggal backdate tidak boleh melebihi waktu sekarang.");
+      }
+      date = selectedDate.toISOString();
+    }
+
+    const auditMeta = {
+      recordedAt,
+      isBackdated: backdateRequested,
+      backdatedBy: backdateRequested ? currentUser.username : "",
+    };
 
     try {
       if (activeOpTab === "inbound") {
@@ -885,6 +943,7 @@ export default function App() {
           sourceWarehouse: formData.inSourceWarehouse.trim(),
           moNumber: formData.inMoNumber?.trim() || "",
           date,
+          ...auditMeta,
         };
         const txData = {
           id: txId,
@@ -898,6 +957,7 @@ export default function App() {
           sourceWarehouse: formData.inSourceWarehouse.trim(),
           moNumber: formData.inMoNumber?.trim() || "",
           batchId,
+          ...auditMeta,
         };
 
         await runTransaction(db, async (transaction) => {
@@ -924,6 +984,12 @@ export default function App() {
         if (!formData.rebagMoNumber?.trim()) return alert("No. MO wajib diisi untuk dokumen rebagging.");
         if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
         if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
+        if (
+          selectedBatch.date &&
+          new Date(date).getTime() < new Date(selectedBatch.date).getTime()
+        ) {
+          return alert("Tanggal rebagging tidak boleh lebih awal dari tanggal batch bahan baku masuk.");
+        }
 
         const sourceBatchRef = doc(
           db,
@@ -965,6 +1031,7 @@ export default function App() {
               executor: "KOPEL JAYA",
               supervisor: currentUser.username,
               date,
+              ...auditMeta,
             }
           );
 
@@ -994,6 +1061,7 @@ export default function App() {
               finishedQty: qty,
               finishedUnit: targetSku.unit,
               batchId: newBatchId,
+              ...auditMeta,
             }
           );
         });
@@ -1014,6 +1082,12 @@ export default function App() {
         for (const item of selections) {
           if (!item.localBatch || item.localBatch.skuId !== sku.id) {
             return alert(`Batch ${item.batchId} tidak valid untuk SKU yang dipilih.`);
+          }
+          if (
+            item.localBatch.date &&
+            new Date(date).getTime() < new Date(item.localBatch.date).getTime()
+          ) {
+            return alert(`Tanggal outbound tidak boleh lebih awal dari tanggal masuk batch ${item.batchId}.`);
           }
         }
 
@@ -1060,6 +1134,7 @@ export default function App() {
                 sourceWarehouse: liveBatch.sourceWarehouse || "",
                 soNumber: formData.outSoNumber?.trim() || "",
                 customer: formData.outCustomer?.trim() || "",
+                ...auditMeta,
               }
             );
           });
@@ -1152,7 +1227,14 @@ export default function App() {
       filtered = filtered.filter(t => new Date(t.date) >= s && new Date(t.date) <= e);
     }
     const ws = XLSX.utils.json_to_sheet(filtered.map(t => ({
-      Tanggal: new Date(t.date).toLocaleString('id-ID'), Tipe: t.type, SKU: t.skuName, Qty: t.qtyChange, Operator: t.operator
+      Tanggal: new Date(t.date).toLocaleString('id-ID'),
+      "Waktu Input": t.recordedAt ? new Date(t.recordedAt).toLocaleString('id-ID') : "",
+      Backdate: t.isBackdated ? "YA" : "TIDAK",
+      "Backdate Oleh": t.backdatedBy || "",
+      Tipe: t.type,
+      SKU: t.skuName,
+      Qty: t.qtyChange,
+      Operator: t.operator
     })));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Riwayat Transaksi");
@@ -1417,6 +1499,47 @@ export default function App() {
                     <button onClick={()=>setActiveOpTab('outbound')} className={`pb-3 text-sm font-semibold transition-all ${activeOpTab==='outbound'?'text-red-600 border-b-2 border-red-600':'text-slate-500 hover:text-slate-800'}`}>Outbound (Keluar)</button>
                   </div>
                   <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-xl">
+                    {isVerifiedSuperAdmin && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(formData.useBackdate)}
+                            onChange={(e) => {
+                              const enabled = e.target.checked;
+                              setFormData((prev) => ({
+                                ...prev,
+                                useBackdate: enabled,
+                                backdateDateTime: enabled
+                                  ? (prev.backdateDateTime || getLocalDateTimeInput())
+                                  : "",
+                              }));
+                            }}
+                            className="w-4 h-4 accent-amber-600"
+                          />
+                          <div>
+                            <div className="font-black text-amber-900 text-sm">Mode Backdate — Khusus Super Admin</div>
+                            <div className="text-xs text-amber-700">Berlaku untuk Inbound, Rebagging, dan Outbound.</div>
+                          </div>
+                        </label>
+                        {formData.useBackdate && (
+                          <div>
+                            <label className="block text-sm font-bold text-amber-900 mb-2">Tanggal & Waktu Transaksi</label>
+                            <input
+                              type="datetime-local"
+                              max={getLocalDateTimeInput()}
+                              value={formData.backdateDateTime}
+                              onChange={(e) => handleBackdateDateTimeChange(e.target.value)}
+                              className="w-full p-3 border border-amber-300 rounded-lg outline-none focus:border-amber-600 bg-white"
+                              required
+                            />
+                            <p className="text-xs text-amber-700 mt-2">
+                              Tanggal transaksi akan mengikuti backdate. Waktu input sebenarnya tetap disimpan untuk audit.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {activeOpTab === 'inbound' && (
                       <>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
@@ -1512,7 +1635,17 @@ export default function App() {
                   <tbody className="divide-y divide-slate-100">
                     {transactions.map(t => (
                       <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="p-4 text-slate-600 font-medium whitespace-nowrap">{new Date(t.date).toLocaleString('id-ID')}</td>
+                        <td className="p-4 text-slate-600 font-medium whitespace-nowrap">
+                          <div>{new Date(t.date).toLocaleString('id-ID')}</div>
+                          {t.isBackdated && (
+                            <div
+                              className="inline-flex mt-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black tracking-wide"
+                              title={t.recordedAt ? `Diinput: ${new Date(t.recordedAt).toLocaleString('id-ID')} oleh ${t.backdatedBy || t.operator}` : "Transaksi backdate"}
+                            >
+                              BACKDATE
+                            </div>
+                          )}
+                        </td>
                         <td className="p-4 text-center">
                           <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
                             {t.type}
