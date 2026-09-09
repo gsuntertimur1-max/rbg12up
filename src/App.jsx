@@ -4,7 +4,7 @@ import {
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
   Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye,
-  Menu, X, LogIn, UserRound, LockKeyhole
+  Menu, X, LogIn, UserRound, LockKeyhole, ClipboardList, ShieldAlert
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
@@ -30,6 +30,7 @@ const DEFAULT_USERS = [
 const DEFAULT_REBAG_RECIPES = [
   {
     id: "FORTIVIT_1KG",
+    version: 1,
     targetSku: "B0030038X",
     label: "Fortivit 1 Kg",
     active: true,
@@ -43,6 +44,7 @@ const DEFAULT_REBAG_RECIPES = [
   },
   {
     id: "FORTIVIT_5KG",
+    version: 1,
     targetSku: "B0030039X",
     label: "Fortivit 5 Kg",
     active: true,
@@ -55,6 +57,7 @@ const DEFAULT_REBAG_RECIPES = [
   },
   {
     id: "GULA",
+    version: 1,
     targetSku: "",
     matchName: "GULA",
     label: "Rebag Gula",
@@ -63,7 +66,7 @@ const DEFAULT_REBAG_RECIPES = [
     materials: [
       { skuId: "A0060004X", required: true, order: 1 },
       { skuId: "D0200062X", required: true, order: 2 },
-      { skuId: "D0200130X", required: true, order: 3, calculationMode: "per_output", outputPerUnit: 24 },
+      { skuId: "D0200130X", required: true, order: 3 },
     ],
   },
 ];
@@ -86,6 +89,60 @@ const normalizeRecipeMaterials = (recipe) =>
     )
     .filter((item) => item.skuId)
     .sort((a, b) => a.order - b.order);
+
+const inferWeightPerPackKg = (sku) => {
+  const explicit = Number(sku?.weightPerPackKg);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+
+  const name = String(sku?.name || "").toUpperCase().replace(",", ".");
+  const match = name.match(/(\d+(?:\.\d+)?)\s*KG\b/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const getOutputNetWeightKg = (sku, packQty) => {
+  const qty = Number(packQty);
+  const weightPerPackKg = inferWeightPerPackKg(sku);
+  if (!Number.isFinite(qty) || qty < 0 || !weightPerPackKg) return null;
+  return qty * weightPerPackKg;
+};
+
+const getResultTmLockId = (value) =>
+  encodeURIComponent(String(value || "").trim().toUpperCase()).replace(/%/g, "_");
+
+const getSuggestedMaterialStandard = (targetSku, materialSku) => {
+  const targetName = String(targetSku?.name || "").toUpperCase();
+  const materialName = String(materialSku?.name || "").toUpperCase();
+
+  const isCarton = materialName.includes("KARDUS") || materialName.includes("KARTON");
+  const isPlastic =
+    materialName.includes("PLASTIK") ||
+    materialName.includes("KEMASAN") ||
+    materialName.includes("PACKAGING");
+
+  const sameGulaFamily = targetName.includes("GULA") && materialName.includes("GULA");
+  const sameFortivitFamily =
+    targetName.includes("FORTIVIT") && materialName.includes("FORTIVIT");
+
+  if (isCarton && sameGulaFamily) {
+    return { calculationMode: "per_output", outputPerUnit: 24, label: "1 kardus = 24 pcs Gula" };
+  }
+
+  if (
+    isCarton &&
+    sameFortivitFamily &&
+    /1\s*KG/.test(targetName.replace(/\s+/g, " "))
+  ) {
+    return { calculationMode: "per_output", outputPerUnit: 20, label: "1 kardus = 20 pcs Fortivit 1 kg" };
+  }
+
+  if (isPlastic && (sameGulaFamily || sameFortivitFamily)) {
+    return { calculationMode: "per_output", outputPerUnit: 1, label: "1 kemasan = 1 pack hasil" };
+  }
+
+  return null;
+};
 
 const getCalculatedMaterialQty = (material, outputQty) => {
   if (material?.calculationMode !== "per_output") return null;
@@ -854,6 +911,9 @@ export default function App() {
   const [activeOpTab, setActiveOpTab] = useState("inbound");
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
+  const [reportStartDate, setReportStartDate] = useState("");
+  const [reportEndDate, setReportEndDate] = useState("");
+  const [traceTmQuery, setTraceTmQuery] = useState("");
   const [resetHistoryLoading, setResetHistoryLoading] = useState(false);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -877,7 +937,7 @@ export default function App() {
     outcome: "GOOD",
   });
 
-  const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG" });
+  const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG", weightPerPackKg: "" });
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
   const [editingRecipeId, setEditingRecipeId] = useState("");
   const [recipeForm, setRecipeForm] = useState({
@@ -1017,29 +1077,22 @@ export default function App() {
   useEffect(() => {
     if (!fbUser || !db || rebagRecipes.length === 0 || skus.length === 0) return;
 
-    const standardByRecipe = {
-      GULA: 24,
-      FORTIVIT_1KG: 20,
-    };
-
     rebagRecipes.forEach((recipe) => {
-      const standard = standardByRecipe[recipe.id];
-      if (!standard || !Array.isArray(recipe.materials)) return;
+      if (!Array.isArray(recipe.materials)) return;
+      const targetSku = skus.find((s) => s.id === recipe.targetSku);
 
       let changed = false;
       const updatedMaterials = recipe.materials.map((item) => {
         if (!item || typeof item === "string" || item.calculationMode) return item;
-        const sku = skus.find((s) => s.id === item.skuId);
-        const name = String(sku?.name || "").toUpperCase();
-        const namedAsCarton = name.includes("KARDUS") || name.includes("KARTON");
-        const defaultGulaCarton = recipe.id === "GULA" && item.skuId === "D0200130X";
-        if (!namedAsCarton && !defaultGulaCarton) return item;
+        const materialSku = skus.find((s) => s.id === item.skuId);
+        const suggestion = getSuggestedMaterialStandard(targetSku, materialSku);
+        if (!suggestion) return item;
 
         changed = true;
         return {
           ...item,
-          calculationMode: "per_output",
-          outputPerUnit: standard,
+          calculationMode: suggestion.calculationMode,
+          outputPerUnit: suggestion.outputPerUnit,
         };
       });
 
@@ -1304,6 +1357,46 @@ export default function App() {
               ...auditMeta,
             }
           );
+
+          transaction.set(resultTmRef, {
+            resultTmNumber,
+            skuId: targetSku.id,
+            skuName: targetSku.name,
+            batchId: newBatchId,
+            transactionId: txId,
+            date,
+            createdBy: currentUser.username,
+          });
+
+          selectedMaterials.forEach((material, index) => {
+            const materialDamageQty = Number(material.damageQty || 0);
+            if (materialDamageQty <= 0) return;
+
+            const damageTxId = `TRX-MAT-DMG-${timestamp}-${index + 1}`;
+            transaction.set(
+              doc(db, "artifacts", appId, "public", "data", "transactions", damageTxId),
+              {
+                id: damageTxId,
+                parentTransactionId: txId,
+                date,
+                type: "MATERIAL_DAMAGE",
+                skuId: material.skuId,
+                skuName: material.skuName,
+                batchId: material.batchId,
+                qtyChange: materialDamageQty,
+                damageQty: materialDamageQty,
+                unit: material.unit,
+                moNumber: material.moNumber,
+                tmNumber: material.tmNumber,
+                resultTmNumber,
+                sourceWarehouse: material.sourceWarehouse,
+                cause: "Kerusakan saat proses Rebagging",
+                operator: currentUser.username,
+                stockAlreadyApplied: true,
+                ...auditMeta,
+              }
+            );
+          });
         });
 
         await batch.commit();
@@ -1318,6 +1411,23 @@ export default function App() {
 
         if (!targetSku) return alert("Pilih SKU hasil rebagging.");
         if (!resultTmNumber) return alert("TM Hasil wajib diisi pada proses Rebagging.");
+
+        const normalizedResultTm = resultTmNumber.toUpperCase();
+        const duplicateTm =
+          inventoryBatches.some(
+            (b) =>
+              String(b.resultTmNumber || "").trim().toUpperCase() === normalizedResultTm
+          ) ||
+          transactions.some(
+            (t) =>
+              t.type === "REBAGGING" &&
+              String(t.resultTmNumber || "").trim().toUpperCase() === normalizedResultTm
+          );
+        if (duplicateTm) {
+          return alert(
+            `TM Hasil ${resultTmNumber} sudah pernah digunakan. Gunakan TM Hasil yang unik untuk produksi baru.`
+          );
+        }
         if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas hasil yang diproses harus lebih dari 0.");
         if (
           ![goodQty, processQty, damageQty].every((value) => Number.isFinite(value) && value >= 0)
@@ -1333,6 +1443,18 @@ export default function App() {
         if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
 
         const recipe = getRebagRecipe(targetSku, rebagRecipes);
+        const weightPerPackKg = inferWeightPerPackKg(targetSku);
+        const netWeightKg = getOutputNetWeightKg(targetSku, qty);
+
+        if (!weightPerPackKg || netWeightKg === null) {
+          return alert(
+            "Berat netto per pack produk jadi belum tersedia. Lengkapi Master SKU terlebih dahulu."
+          );
+        }
+
+        const goodKg = goodQty * weightPerPackKg;
+        const processKg = processQty * weightPerPackKg;
+        const damageKg = damageQty * weightPerPackKg;
         let selectedMaterials = [];
 
         if (recipe) {
@@ -1451,12 +1573,25 @@ export default function App() {
         const txId = `TRX-${timestamp}`;
         const sourceMoNumbers = [...new Set(selectedMaterials.map((m) => m.moNumber).filter(Boolean))];
         const sourceTmNumbers = [...new Set(selectedMaterials.map((m) => m.tmNumber).filter(Boolean))];
-        const materialDamageTotal = selectedMaterials.reduce(
-          (sum, material) => sum + Number(material.damageQty || 0),
-          0
-        );
+        const materialDamageLineCount = selectedMaterials.filter(
+          (material) => Number(material.damageQty || 0) > 0
+        ).length;
 
         await runTransaction(db, async (transaction) => {
+          const resultTmRef = doc(
+            db,
+            "artifacts",
+            appId,
+            "public",
+            "data",
+            "result_tms",
+            getResultTmLockId(resultTmNumber)
+          );
+          const resultTmSnap = await transaction.get(resultTmRef);
+          if (resultTmSnap.exists()) {
+            throw new Error(`TM Hasil ${resultTmNumber} sudah digunakan oleh produksi lain.`);
+          }
+
           const materialRefs = selectedMaterials.map((material) =>
             doc(db, "artifacts", appId, "public", "data", "batches", material.batchId)
           );
@@ -1499,12 +1634,30 @@ export default function App() {
             processQty,
             damageQty,
             totalProducedQty: qty,
+            outputQty: qty,
+            outputUnit: targetSku.unit || "Pack",
+            weightPerPackKg,
+            netWeightKg,
+            goodKg,
+            processKg,
+            damageKg,
             sourceWarehouse: sourceWarehouses,
             targetStack: formData.rebagTargetStack,
             sourceBatchId: primaryMaterial?.batchId || "",
             sourceBatchIds: selectedMaterials.map((m) => m.batchId),
             materials: selectedMaterials,
-            materialDamageTotal,
+            materialDamageLineCount,
+            recipeId: recipe?.id || "MANUAL",
+            recipeVersion: Number(recipe?.version || 1),
+            recipeSnapshot: recipe
+              ? {
+                  id: recipe.id,
+                  version: Number(recipe.version || 1),
+                  label: recipe.label || "",
+                  targetSku: recipe.targetSku || targetSku.id,
+                  materials: normalizeRecipeMaterials(recipe),
+                }
+              : null,
             moNumber: sourceMoNumbers.join(", "),
             sourceMoNumbers,
             sourceTmNumbers,
@@ -1532,9 +1685,16 @@ export default function App() {
               skuName: targetSku.name,
               qtyChange: goodQty,
               processedQty: qty,
+              outputQty: qty,
+              outputUnit: targetSku.unit || "Pack",
+              weightPerPackKg,
+              netWeightKg,
               goodQty,
               processQty,
               damageQty,
+              goodKg,
+              processKg,
+              damageKg,
               unit: targetSku.unit,
               operator: currentUser.username,
               supervisor: currentUser.username,
@@ -1554,11 +1714,33 @@ export default function App() {
               sourceQty: primaryMaterial?.qty || 0,
               sourceUnit: primaryMaterial?.unit || "",
               materials: selectedMaterials,
-              materialDamageTotal,
+              materialDamageLineCount,
+              reconciliation: {
+                balanced: Math.abs(totalResultQty - qty) <= 0.0001,
+                outputQty: qty,
+                outputKg: netWeightKg,
+                goodQty,
+                goodKg,
+                processQty,
+                processKg,
+                damageQty,
+                damageKg,
+              },
               finishedQty: goodQty,
               finishedUnit: targetSku.unit,
               batchId: newBatchId,
               recipeKey: recipe?.id || "MANUAL",
+              recipeId: recipe?.id || "MANUAL",
+              recipeVersion: Number(recipe?.version || 1),
+              recipeSnapshot: recipe
+                ? {
+                    id: recipe.id,
+                    version: Number(recipe.version || 1),
+                    label: recipe.label || "",
+                    targetSku: recipe.targetSku || targetSku.id,
+                    materials: normalizeRecipeMaterials(recipe),
+                  }
+                : null,
               ...auditMeta,
             }
           );
@@ -1699,20 +1881,32 @@ export default function App() {
         const liveCurrentQty = Number(liveBatch.currentQty || 0);
         const liveGoodQty = Number(liveBatch.goodQty ?? liveCurrentQty);
         const liveDamageQty = Number(liveBatch.damageQty || 0);
+        const liveWeightPerPackKg =
+          Number(liveBatch.weightPerPackKg) || inferWeightPerPackKg(sku) || 0;
+        const liveProcessKg =
+          Number(liveBatch.processKg) || liveProcessQty * liveWeightPerPackKg;
+        const liveGoodKg =
+          Number(liveBatch.goodKg) || liveGoodQty * liveWeightPerPackKg;
+        const liveDamageKg =
+          Number(liveBatch.damageKg) || liveDamageQty * liveWeightPerPackKg;
 
         if (qty > liveProcessQty) {
           throw new Error(`Jumlah melebihi stok PROCESS terbaru (${liveProcessQty}).`);
         }
 
+        const resolvedKg = qty * liveWeightPerPackKg;
         const updates = {
           processQty: liveProcessQty - qty,
+          processKg: Math.max(0, liveProcessKg - resolvedKg),
         };
 
         if (outcome === "GOOD") {
           updates.currentQty = liveCurrentQty + qty;
           updates.goodQty = liveGoodQty + qty;
+          updates.goodKg = liveGoodKg + resolvedKg;
         } else {
           updates.damageQty = liveDamageQty + qty;
+          updates.damageKg = liveDamageKg + resolvedKg;
         }
 
         transaction.update(batchRef, updates);
@@ -1729,6 +1923,8 @@ export default function App() {
             skuName: sku?.name || liveBatch.skuId || "",
             qtyChange: outcome === "GOOD" ? qty : 0,
             resolutionQty: qty,
+            resolutionKg: qty * liveWeightPerPackKg,
+            weightPerPackKg: liveWeightPerPackKg,
             fromStatus: "PROCESS",
             toStatus: outcome,
             unit: sku?.unit || "",
@@ -1874,11 +2070,13 @@ export default function App() {
 
     const recipeId = editingRecipeId || `REC-${targetSku}-${Date.now()}`;
     const existing = rebagRecipes.find((recipe) => recipe.id === editingRecipeId);
+    const nextVersion = editingRecipeId ? Number(existing?.version || 1) + 1 : 1;
 
     await setDoc(
       doc(db, "artifacts", appId, "public", "data", "recipes", recipeId),
       {
         id: recipeId,
+        version: nextVersion,
         targetSku,
         label,
         active: recipeForm.active !== false,
@@ -1912,10 +2110,30 @@ export default function App() {
   const handleAddManualSku = async (e) => {
     e.preventDefault();
     if (!newSku.id || !newSku.name) return alert("ID dan Nama SKU wajib diisi!");
+
+    const normalizedSku = {
+      ...newSku,
+      weightPerPackKg:
+        newSku.type === "rebagged" && Number(newSku.weightPerPackKg) > 0
+          ? Number(newSku.weightPerPackKg)
+          : "",
+    };
+
+    if (
+      normalizedSku.type === "rebagged" &&
+      !normalizedSku.weightPerPackKg &&
+      !inferWeightPerPackKg(normalizedSku)
+    ) {
+      return alert("Berat netto per pack wajib diisi untuk SKU produk jadi.");
+    }
+
     if (db) {
-      await setDoc(doc(db, "artifacts", appId, "public", "data", "skus", newSku.id.toString()), newSku);
+      await setDoc(
+        doc(db, "artifacts", appId, "public", "data", "skus", newSku.id.toString()),
+        normalizedSku
+      );
       showNotif(`SKU ${newSku.name} Berhasil Ditambahkan`);
-      setNewSku({ id: "", name: "", type: "bulk", unit: "KG" });
+      setNewSku({ id: "", name: "", type: "bulk", unit: "KG", weightPerPackKg: "" });
     }
   };
 
