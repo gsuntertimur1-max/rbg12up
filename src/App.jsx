@@ -4352,6 +4352,133 @@ Masukkan alasan override Super Admin:`
     }
   };
 
+
+  const resetQcForm = (type = activeQcTab) => {
+    setQcForm(createInitialQcForm(type));
+  };
+
+  const handleQcTabChange = (type) => {
+    setActiveQcTab(type);
+    setQcForm(createInitialQcForm(type));
+  };
+
+  const handleQcCheckChange = (key, checked) => {
+    setQcForm((prev) => ({
+      ...prev,
+      checks: { ...prev.checks, [key]: checked },
+    }));
+  };
+
+  const handleQcSubmit = async (e) => {
+    e.preventDefault();
+    if (!hasAccess(["Super Admin", "Admin", "QC"])) return alert("Akses keputusan QC hanya tersedia untuk QC/Admin/Super Admin.");
+    if (!db) return alert("Database belum siap.");
+    if (!qcForm.batchId) return alert("Pilih batch yang akan diperiksa.");
+    const batch = inventoryBatches.find((item) => item.batchId === qcForm.batchId);
+    if (!batch) return alert("Batch tidak ditemukan.");
+    const sku = skus.find((item) => item.id === batch.skuId);
+    const isIncoming = activeQcTab === "incoming";
+    if (isIncoming && sku?.type !== "bulk") return alert("QC Bahan Masuk hanya untuk SKU bahan baku/kemasan.");
+    if (!isIncoming && sku?.type !== "rebagged") return alert("QC Produk Jadi hanya untuk SKU hasil Rebagging.");
+
+    const failedChecks = Object.entries(qcForm.checks).filter(([, value]) => !value).map(([key]) => key);
+    const positiveDecision = isIncoming ? "ACCEPT" : "RELEASE";
+    if (qcForm.decision === positiveDecision && failedChecks.length > 0) {
+      return alert(`Tidak dapat ${positiveDecision}. Masih ada ${failedChecks.length} parameter QC yang Tidak Sesuai.`);
+    }
+    if (["HOLD", "REJECT"].includes(qcForm.decision) && !String(qcForm.nonconformity || "").trim()) {
+      return alert("Penyimpangan/Ketidaksesuaian wajib diisi untuk HOLD atau REJECT.");
+    }
+    if (qcForm.decision === "REJECT" && !String(qcForm.correctiveAction || "").trim()) {
+      return alert("Tindakan koreksi/disposisi wajib diisi untuk REJECT.");
+    }
+
+    const inspectedAt = new Date().toISOString();
+    const recordId = `QC-${isIncoming ? "IN" : "FG"}-${Date.now()}`;
+    const batchStatus = isIncoming
+      ? qcForm.decision === "ACCEPT" ? "ACCEPTED" : qcForm.decision === "HOLD" ? "HOLD" : "REJECTED"
+      : qcForm.decision === "RELEASE" ? "RELEASED" : qcForm.decision === "HOLD" ? "HOLD" : "REJECTED";
+    const record = {
+      id: recordId,
+      qcType: isIncoming ? "INCOMING" : "FINISHED",
+      batchId: batch.batchId,
+      skuId: batch.skuId,
+      skuName: sku?.name || batch.skuId || "",
+      unit: sku?.unit || "",
+      moNumber: batch.moNumber || "",
+      mainMoNumber: batch.mainMoNumber || getPrimaryMoNumber(batch) || "",
+      tmNumber: batch.tmNumber || "",
+      resultTmNumber: batch.resultTmNumber || "",
+      sourceWarehouse: batch.sourceWarehouse || "",
+      targetStack: batch.targetStack || "",
+      productionDate: batch.productionDate || "",
+      expiryDate: batch.expiryDate || "",
+      qtySnapshot: Number(batch.currentQty || 0),
+      coaNumber: String(qcForm.coaNumber || "").trim(),
+      checks: qcForm.checks,
+      decision: qcForm.decision,
+      batchStatus,
+      inspectionNote: String(qcForm.inspectionNote || "").trim(),
+      nonconformity: String(qcForm.nonconformity || "").trim(),
+      correctiveAction: String(qcForm.correctiveAction || "").trim(),
+      inspectedAt,
+      inspectedBy: currentUser.username,
+      inspectedRole: currentUser.role,
+    };
+
+    try {
+      setQcSaving(true);
+      await runTransaction(db, async (transaction) => {
+        const batchRef = doc(db, "artifacts", appId, "public", "data", "batches", batch.batchId);
+        const batchSnap = await transaction.get(batchRef);
+        if (!batchSnap.exists()) throw new Error("Batch sudah tidak ditemukan.");
+        transaction.update(batchRef, {
+          qcStatus: batchStatus,
+          qcType: record.qcType,
+          qcLastRecordId: recordId,
+          qcUpdatedAt: inspectedAt,
+          qcUpdatedBy: currentUser.username,
+          qcDecision: qcForm.decision,
+        });
+        transaction.set(doc(db, "artifacts", appId, "public", "data", "qc_records", recordId), record);
+      });
+      showNotif(isIncoming ? `QC bahan: ${qcForm.decision}` : `QC produk jadi: ${qcForm.decision}`);
+      resetQcForm(activeQcTab);
+    } catch (error) {
+      console.error("QC Save Error:", error);
+      alert(`Gagal menyimpan QC: ${error.message || "Terjadi kesalahan."}`);
+    } finally {
+      setQcSaving(false);
+    }
+  };
+
+  const generateQcPdf = async (record) => {
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const L = 36, R = pageW - 36, W = R - L;
+    const incoming = record.qcType === "INCOMING";
+    const title = incoming ? "FORM QC BAHAN MASUK" : "FORM QC PRODUK JADI";
+    const checksDef = incoming ? QC_INCOMING_CHECKS : QC_FINISHED_CHECKS;
+    const line=(x1,y1,x2,y2,w=0.5)=>{pdf.setDrawColor(35);pdf.setLineWidth(w);pdf.line(x1,y1,x2,y2);};
+    const box=(x,y,w,h,fill=null)=>{pdf.setDrawColor(35);pdf.setLineWidth(0.5);if(fill!==null){pdf.setFillColor(fill);pdf.rect(x,y,w,h,"FD");}else pdf.rect(x,y,w,h);};
+    const txt=(value,x,y,opts={})=>{const {size=7,bold=false,align="left",maxWidth=null,maxLines=null}=opts;pdf.setFont("helvetica",bold?"bold":"normal");pdf.setFontSize(size);pdf.setTextColor(0);const str=String(value??"");if(maxWidth){let lines=pdf.splitTextToSize(str,maxWidth);if(maxLines&&lines.length>maxLines){lines=lines.slice(0,maxLines);lines[lines.length-1]=String(lines[lines.length-1]).replace(/\s*$/,"")+"...";}pdf.text(lines,x,y,{align});}else pdf.text(str,x,y,{align});};
+    try { const logo=await loadPdfLogo(); const nw=Number(logo?.naturalWidth||logo?.width||1), nh=Number(logo?.naturalHeight||logo?.height||1); const scale=Math.min(120/nw,34/nh); pdf.addImage(logo,"PNG",L+12,28+(42-nh*scale)/2,nw*scale,nh*scale); } catch(error){ txt("BULOG",L+55,55,{size:19,bold:true,align:"center"}); }
+    box(L,24,W,50); txt(title,pageW/2,47,{size:15,bold:true,align:"center"}); txt("Rekaman Quality Control Sistem Rebagging",pageW/2,62,{size:6.5,bold:true,align:"center"});
+    let y=82;
+    const meta=[
+      ["No. Rekaman",record.id],["Tanggal QC",new Date(record.inspectedAt).toLocaleString("id-ID")],["SKU / Produk",`${record.skuId} - ${record.skuName}`],["Batch",record.batchId],
+      incoming?["MO / TM Bahan",`${record.moNumber||"-"} / ${record.tmNumber||"-"}`]:["MO Utama / TM Hasil",`${record.mainMoNumber||"-"} / ${record.resultTmNumber||"-"}`],
+      ["Gudang / Tumpukan",record.sourceWarehouse||record.targetStack||"-"],["Expiry",formatPdfDate(record.expiryDate)||"-"],["Qty Saat QC",`${formatStockNumber(record.qtySnapshot)} ${record.unit||""}`],["COA / Hasil Uji",record.coaNumber||"-"]
+    ];
+    meta.forEach(([label,value])=>{box(L,y,W,18);txt(label,L+4,y+12,{size:6.2,bold:true});txt(":",L+120,y+12,{size:6.2});txt(value,L+130,y+12,{size:6.2,maxWidth:W-136,maxLines:1});y+=18;});
+    y+=8; box(L,y,W,18,235); txt("PARAMETER PEMERIKSAAN",L+4,y+12,{size:6.5,bold:true}); y+=18;
+    checksDef.forEach(([key,label],index)=>{box(L,y,W,22);txt(String(index+1),L+8,y+14,{size:6.2,bold:true});txt(label,L+28,y+14,{size:6.2,maxWidth:350,maxLines:1});txt(record.checks?.[key]?"SESUAI":"TIDAK SESUAI",R-80,y+14,{size:6.2,bold:true,align:"center"});y+=22;});
+    y+=8;box(L,y,W,26,235);txt("KEPUTUSAN QC",L+4,y+17,{size:6.5,bold:true});txt(`${record.decision} / STATUS BATCH: ${record.batchStatus}`,R-5,y+17,{size:7,bold:true,align:"right"});y+=32;
+    [["Catatan Pemeriksaan",record.inspectionNote||"-"],["Penyimpangan / Ketidaksesuaian",record.nonconformity||"-"],["Tindakan Koreksi / Disposisi",record.correctiveAction||"-"]].forEach(([label,value])=>{box(L,y,W,46);txt(label,L+4,y+12,{size:6.2,bold:true});txt(value,L+4,y+27,{size:6,maxWidth:W-8,maxLines:2});y+=46;});
+    y+=10; const sigW=W/2; box(L,y,W,88); line(L+sigW,y,L+sigW,y+88); txt("Diperiksa oleh",L+sigW/2,y+14,{size:6.2,bold:true,align:"center"}); txt("Verifikasi / Atasan",L+sigW*1.5,y+14,{size:6.2,bold:true,align:"center"}); txt(`(${record.inspectedBy})`,L+sigW/2,y+68,{size:6.5,bold:true,align:"center"}); txt(record.inspectedRole||"",L+sigW/2,y+80,{size:5.5,align:"center"}); txt("(________________________)",L+sigW*1.5,y+68,{size:6.2,align:"center"});
+    const safeId=String(record.id||"QC").replace(/[^a-z0-9-_]/gi,"_"); pdf.save(`${title.replace(/\s+/g,"_")}_${safeId}.pdf`);
+  };
+
   const handleDownloadInventoryCard = async (sku) => {
     try {
       const skuBatches = inventoryBatches.filter((b) => b.skuId === sku.id);
