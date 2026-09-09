@@ -63,7 +63,7 @@ const DEFAULT_REBAG_RECIPES = [
     materials: [
       { skuId: "A0060004X", required: true, order: 1 },
       { skuId: "D0200062X", required: true, order: 2 },
-      { skuId: "D0200130X", required: true, order: 3 },
+      { skuId: "D0200130X", required: true, order: 3, calculationMode: "per_output", outputPerUnit: 24 },
     ],
   },
 ];
@@ -72,15 +72,30 @@ const normalizeRecipeMaterials = (recipe) =>
   (recipe?.materials || [])
     .map((item, index) =>
       typeof item === "string"
-        ? { skuId: item, required: true, order: index + 1 }
+        ? { skuId: item, required: true, order: index + 1, calculationMode: "manual", outputPerUnit: "" }
         : {
             skuId: item?.skuId || "",
             required: item?.required !== false,
             order: Number(item?.order) || index + 1,
+            calculationMode: item?.calculationMode === "per_output" ? "per_output" : "manual",
+            outputPerUnit:
+              item?.calculationMode === "per_output" && Number(item?.outputPerUnit) > 0
+                ? Number(item.outputPerUnit)
+                : "",
           }
     )
     .filter((item) => item.skuId)
     .sort((a, b) => a.order - b.order);
+
+const getCalculatedMaterialQty = (material, outputQty) => {
+  if (material?.calculationMode !== "per_output") return null;
+  const ratio = Number(material?.outputPerUnit);
+  const produced = Number(outputQty);
+  if (!Number.isFinite(ratio) || ratio <= 0 || !Number.isFinite(produced) || produced <= 0) {
+    return 0;
+  }
+  return Math.ceil(produced / ratio);
+};
 
 const getRebagRecipe = (targetSku, recipes = []) => {
   if (!targetSku) return null;
@@ -350,7 +365,7 @@ async function generateRebaggingBatchPdf(tx) {
     Array.isArray(tx.materials) && tx.materials.length > 0
       ? tx.materials.slice(0, 5).map((m) => [
           `${m.skuId || ""} ${m.skuName || ""}`.trim(),
-          `${m.qty ?? ""} ${m.unit || ""}`.trim(),
+          `${m.usedQty ?? m.qty ?? ""} ${m.unit || ""}${Number(m.damageQty || 0) > 0 ? ` + rusak ${m.damageQty}` : ""}`.trim(),
           executor,
           supervisor,
         ])
@@ -870,7 +885,7 @@ export default function App() {
     label: "",
     active: true,
     notes: "",
-    materials: [{ rowId: "MAT-1", skuId: "", required: true }],
+    materials: [{ rowId: "MAT-1", skuId: "", required: true, calculationMode: "manual", outputPerUnit: "" }],
   });
 
   useEffect(() => {
@@ -998,6 +1013,49 @@ export default function App() {
       unsubConfig();
     };
   }, [fbUser]);
+
+  useEffect(() => {
+    if (!fbUser || !db || rebagRecipes.length === 0 || skus.length === 0) return;
+
+    const standardByRecipe = {
+      GULA: 24,
+      FORTIVIT_1KG: 20,
+    };
+
+    rebagRecipes.forEach((recipe) => {
+      const standard = standardByRecipe[recipe.id];
+      if (!standard || !Array.isArray(recipe.materials)) return;
+
+      let changed = false;
+      const updatedMaterials = recipe.materials.map((item) => {
+        if (!item || typeof item === "string" || item.calculationMode) return item;
+        const sku = skus.find((s) => s.id === item.skuId);
+        const name = String(sku?.name || "").toUpperCase();
+        if (!name.includes("KARDUS") && !name.includes("KARTON")) return item;
+
+        changed = true;
+        return {
+          ...item,
+          calculationMode: "per_output",
+          outputPerUnit: standard,
+        };
+      });
+
+      if (changed) {
+        setDoc(
+          doc(db, "artifacts", appId, "public", "data", "recipes", recipe.id),
+          {
+            ...recipe,
+            materials: updatedMaterials,
+            updatedAt: new Date().toISOString(),
+            updatedBy: "system-migration",
+          }
+        ).catch((error) =>
+          console.error("Gagal memperbarui standar kardus lama:", error)
+        );
+      }
+    });
+  }, [fbUser, db, rebagRecipes, skus]);
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
@@ -1283,8 +1341,17 @@ export default function App() {
             const selection = rebagMaterialSelections[materialSkuId] || {};
             const sourceBatch = inventoryBatches.find((b) => b.batchId === selection.batchId);
             const sourceSku = skus.find((s) => s.id === materialSkuId);
-            const materialQty = Number(selection.qty);
-            const hasSelection = Boolean(selection.batchId) || Boolean(selection.qty);
+            const calculatedQty = getCalculatedMaterialQty(recipeMaterial, qty);
+            const usedQty =
+              recipeMaterial.calculationMode === "per_output"
+                ? Number(calculatedQty || 0)
+                : Number(selection.qty);
+            const materialDamageQty = Number(selection.damageQty || 0);
+            const totalMaterialQty = usedQty + materialDamageQty;
+            const hasSelection =
+              Boolean(selection.batchId) ||
+              Boolean(selection.qty) ||
+              materialDamageQty > 0;
 
             if (!recipeMaterial.required && !hasSelection) {
               continue;
@@ -1296,8 +1363,21 @@ export default function App() {
             }
             if (!sourceBatch.moNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. MO.`);
             if (!sourceBatch.tmNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. TM.`);
-            if (!Number.isFinite(materialQty) || materialQty <= 0) {
-              return alert(`Isi jumlah pemakaian bahan ${materialSkuId} lebih dari 0.`);
+            if (!Number.isFinite(materialDamageQty) || materialDamageQty < 0) {
+              return alert(`Qty rusak bahan ${materialSkuId} tidak valid.`);
+            }
+            if (
+              recipeMaterial.calculationMode === "per_output" &&
+              (!Number.isFinite(Number(recipeMaterial.outputPerUnit)) ||
+                Number(recipeMaterial.outputPerUnit) <= 0)
+            ) {
+              return alert(`Standar isi kemasan bahan ${materialSkuId} belum valid di Master Komposisi.`);
+            }
+            if (!Number.isFinite(usedQty) || usedQty <= 0) {
+              return alert(`Jumlah pemakaian bahan ${materialSkuId} harus lebih dari 0.`);
+            }
+            if (!Number.isFinite(totalMaterialQty) || totalMaterialQty <= 0) {
+              return alert(`Total pemakaian bahan ${materialSkuId} tidak valid.`);
             }
             if (
               sourceBatch.date &&
@@ -1312,10 +1392,17 @@ export default function App() {
               skuId: materialSkuId,
               skuName: sourceSku?.name || materialSkuId,
               required: recipeMaterial.required,
+              calculationMode: recipeMaterial.calculationMode || "manual",
+              outputPerUnit: recipeMaterial.outputPerUnit || "",
+              standardQty:
+                recipeMaterial.calculationMode === "per_output" ? usedQty : null,
+              usedQty,
+              damageQty: materialDamageQty,
+              totalQty: totalMaterialQty,
               batchId: sourceBatch.batchId,
               moNumber: sourceBatch.moNumber,
               tmNumber: sourceBatch.tmNumber,
-              qty: materialQty,
+              qty: totalMaterialQty,
               unit: sourceSku?.unit || "",
               sourceWarehouse: sourceBatch.sourceWarehouse || "",
             });
@@ -1345,6 +1432,12 @@ export default function App() {
               batchId: selectedBatch.batchId,
               moNumber: selectedBatch.moNumber,
               tmNumber: selectedBatch.tmNumber,
+              calculationMode: "manual",
+              outputPerUnit: "",
+              standardQty: null,
+              usedQty: qty,
+              damageQty: 0,
+              totalQty: qty,
               qty,
               unit: sourceSku?.unit || "",
               sourceWarehouse: selectedBatch.sourceWarehouse || "",
@@ -1654,7 +1747,7 @@ export default function App() {
       label: "",
       active: true,
       notes: "",
-      materials: [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true }],
+      materials: [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true, calculationMode: "manual", outputPerUnit: "" }],
     });
   };
 
@@ -1663,7 +1756,7 @@ export default function App() {
       ...prev,
       materials: [
         ...prev.materials,
-        { rowId: `MAT-${Date.now()}-${prev.materials.length + 1}`, skuId: "", required: true },
+        { rowId: `MAT-${Date.now()}-${prev.materials.length + 1}`, skuId: "", required: true, calculationMode: "manual", outputPerUnit: "" },
       ],
     }));
   };
@@ -1685,7 +1778,7 @@ export default function App() {
         materials:
           next.length > 0
             ? next
-            : [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true }],
+            : [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true, calculationMode: "manual", outputPerUnit: "" }],
       };
     });
   };
@@ -1695,6 +1788,8 @@ export default function App() {
       rowId: `MAT-EDIT-${index + 1}-${Date.now()}`,
       skuId: item.skuId,
       required: item.required,
+      calculationMode: item.calculationMode || "manual",
+      outputPerUnit: item.outputPerUnit || "",
     }));
     setEditingRecipeId(recipe.id);
     setRecipeForm({
@@ -1705,7 +1800,7 @@ export default function App() {
       materials:
         materials.length > 0
           ? materials
-          : [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true }],
+          : [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true, calculationMode: "manual", outputPerUnit: "" }],
     });
     setActiveTabSettings("recipes");
   };
@@ -1725,12 +1820,28 @@ export default function App() {
         skuId: String(item.skuId || "").trim(),
         required: item.required !== false,
         order: index + 1,
+        calculationMode: item.calculationMode === "per_output" ? "per_output" : "manual",
+        outputPerUnit:
+          item.calculationMode === "per_output" && Number(item.outputPerUnit) > 0
+            ? Number(item.outputPerUnit)
+            : "",
       }))
       .filter((item) => item.skuId);
 
     if (!targetSku) return alert("Pilih SKU Produk Jadi.");
     if (!label) return alert("Nama komposisi wajib diisi.");
     if (materials.length === 0) return alert("Tambahkan minimal satu SKU bahan.");
+
+    const invalidAutoMaterial = materials.find(
+      (item) =>
+        item.calculationMode === "per_output" &&
+        (!Number.isFinite(Number(item.outputPerUnit)) || Number(item.outputPerUnit) <= 0)
+    );
+    if (invalidAutoMaterial) {
+      return alert(
+        `Isi per kemasan untuk SKU ${invalidAutoMaterial.skuId} harus lebih dari 0.`
+      );
+    }
 
     const duplicateMaterial = materials.find(
       (item, index) =>
