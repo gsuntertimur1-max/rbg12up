@@ -1,31 +1,19 @@
-name: One-time Stock Card Final Polish
+name: One-time Stock Card Build Check
 
 on:
   push:
     paths:
       - ".github/workflows/patch-stock-card.yml"
-      - ".github/scripts/patch_stock_card_final_polish.py"
-
-permissions:
-  contents: write
 
 jobs:
-  patch:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-      - name: Apply final stock card polish
-        run: python .github/scripts/patch_stock_card_final_polish.py
-      - name: Commit App changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.jsx
-          if git diff --cached --quiet; then
-            echo "No changes."
-            exit 0
-          fi
-          git commit -m "Polish stock card merged headers and signatures"
-          git push
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
