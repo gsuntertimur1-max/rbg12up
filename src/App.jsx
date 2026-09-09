@@ -108,8 +108,30 @@ const getOutputNetWeightKg = (sku, packQty) => {
   return qty * weightPerPackKg;
 };
 
-const getResultTmLockId = (value) =>
+const getStableDocId = (value) =>
   encodeURIComponent(String(value || "").trim().toUpperCase()).replace(/%/g, "_");
+
+const getProductionDateCode = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const yy = String(date.getFullYear()).slice(-2);
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yy}${mm}${dd}`;
+};
+
+const getBatchSequenceKey = (skuId, dateCode) =>
+  getStableDocId(`${skuId}-${dateCode}`);
+
+const getPrimaryMoNumber = (record) => {
+  if (!record) return "";
+  if (record.mainMoNumber) return String(record.mainMoNumber).trim();
+  if (Array.isArray(record.sourceMoNumbers) && record.sourceMoNumbers.length > 0) {
+    return String(record.sourceMoNumbers[0] || "").trim();
+  }
+  const moNumber = String(record.moNumber || "").trim();
+  return moNumber.includes(",") ? moNumber.split(",")[0].trim() : moNumber;
+};
 
 const getSuggestedMaterialStandard = (targetSku, materialSku) => {
   const targetName = String(targetSku?.name || "").toUpperCase();
@@ -1360,45 +1382,6 @@ export default function App() {
             }
           );
 
-          transaction.set(resultTmRef, {
-            resultTmNumber,
-            skuId: targetSku.id,
-            skuName: targetSku.name,
-            batchId: newBatchId,
-            transactionId: txId,
-            date,
-            createdBy: currentUser.username,
-          });
-
-          selectedMaterials.forEach((material, index) => {
-            const materialDamageQty = Number(material.damageQty || 0);
-            if (materialDamageQty <= 0) return;
-
-            const damageTxId = `TRX-MAT-DMG-${timestamp}-${index + 1}`;
-            transaction.set(
-              doc(db, "artifacts", appId, "public", "data", "transactions", damageTxId),
-              {
-                id: damageTxId,
-                parentTransactionId: txId,
-                date,
-                type: "MATERIAL_DAMAGE",
-                skuId: material.skuId,
-                skuName: material.skuName,
-                batchId: material.batchId,
-                qtyChange: materialDamageQty,
-                damageQty: materialDamageQty,
-                unit: material.unit,
-                moNumber: material.moNumber,
-                tmNumber: material.tmNumber,
-                resultTmNumber,
-                sourceWarehouse: material.sourceWarehouse,
-                cause: "Kerusakan saat proses Rebagging",
-                operator: currentUser.username,
-                stockAlreadyApplied: true,
-                ...auditMeta,
-              }
-            );
-          });
         });
 
         await batch.commit();
@@ -1415,21 +1398,6 @@ export default function App() {
         if (!resultTmNumber) return alert("TM Hasil wajib diisi pada proses Rebagging.");
 
         const normalizedResultTm = resultTmNumber.toUpperCase();
-        const duplicateTm =
-          inventoryBatches.some(
-            (b) =>
-              String(b.resultTmNumber || "").trim().toUpperCase() === normalizedResultTm
-          ) ||
-          transactions.some(
-            (t) =>
-              t.type === "REBAGGING" &&
-              String(t.resultTmNumber || "").trim().toUpperCase() === normalizedResultTm
-          );
-        if (duplicateTm) {
-          return alert(
-            `TM Hasil ${resultTmNumber} sudah pernah digunakan. Gunakan TM Hasil yang unik untuk produksi baru.`
-          );
-        }
         if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas hasil yang diproses harus lebih dari 0.");
         if (
           ![goodQty, processQty, damageQty].every((value) => Number.isFinite(value) && value >= 0)
@@ -1571,33 +1539,94 @@ export default function App() {
           ];
         }
 
-        const newBatchId = `RBG-${timestamp}`;
+        let newBatchId = "";
         const txId = `TRX-${timestamp}`;
         const sourceMoNumbers = [...new Set(selectedMaterials.map((m) => m.moNumber).filter(Boolean))];
         const sourceTmNumbers = [...new Set(selectedMaterials.map((m) => m.tmNumber).filter(Boolean))];
+        const primaryMaterial = selectedMaterials[0];
+        const mainMoNumber = String(primaryMaterial?.moNumber || "").trim();
+
+        if (!mainMoNumber) {
+          return alert("MO Utama/pengikat TM Hasil belum tersedia pada bahan utama.");
+        }
+
+        const priorTmRecords = [
+          ...transactions.filter((t) => t.type === "REBAGGING"),
+          ...inventoryBatches.filter((b) => b.resultTmNumber),
+        ];
+        const conflictingTmRecord = priorTmRecords.find(
+          (record) =>
+            String(record.resultTmNumber || "").trim().toUpperCase() === normalizedResultTm &&
+            getPrimaryMoNumber(record) &&
+            getPrimaryMoNumber(record).toUpperCase() !== mainMoNumber.toUpperCase()
+        );
+        if (conflictingTmRecord) {
+          return alert(
+            `TM Hasil ${resultTmNumber} sudah terikat ke MO Utama ${getPrimaryMoNumber(conflictingTmRecord)}. Gunakan TM Hasil yang sesuai dengan MO ${mainMoNumber}.`
+          );
+        }
+
+        const productionDateCode = getProductionDateCode(date);
+        if (!productionDateCode) {
+          return alert("Tanggal produksi tidak valid untuk pembuatan nomor batch.");
+        }
+
+        const batchPrefix = `${targetSku.id}-${productionDateCode}-`;
+        const existingSequenceMax = inventoryBatches.reduce((max, batch) => {
+          const batchId = String(batch.batchId || "");
+          if (!batchId.startsWith(batchPrefix)) return max;
+          const suffix = Number(batchId.slice(batchPrefix.length));
+          return Number.isFinite(suffix) ? Math.max(max, suffix) : max;
+        }, 0);
+
         const materialDamageLineCount = selectedMaterials.filter(
           (material) => Number(material.damageQty || 0) > 0
         ).length;
 
         await runTransaction(db, async (transaction) => {
-          const resultTmRef = doc(
+          const tmBindingRef = doc(
             db,
             "artifacts",
             appId,
             "public",
             "data",
-            "result_tms",
-            getResultTmLockId(resultTmNumber)
+            "tm_mo_bindings",
+            getStableDocId(resultTmNumber)
           );
-          const resultTmSnap = await transaction.get(resultTmRef);
-          if (resultTmSnap.exists()) {
-            throw new Error(`TM Hasil ${resultTmNumber} sudah digunakan oleh produksi lain.`);
-          }
-
+          const batchSequenceRef = doc(
+            db,
+            "artifacts",
+            appId,
+            "public",
+            "data",
+            "batch_sequences",
+            getBatchSequenceKey(targetSku.id, productionDateCode)
+          );
           const materialRefs = selectedMaterials.map((material) =>
             doc(db, "artifacts", appId, "public", "data", "batches", material.batchId)
           );
-          const materialSnaps = await Promise.all(materialRefs.map((ref) => transaction.get(ref)));
+
+          const [tmBindingSnap, batchSequenceSnap, ...materialSnaps] = await Promise.all([
+            transaction.get(tmBindingRef),
+            transaction.get(batchSequenceRef),
+            ...materialRefs.map((ref) => transaction.get(ref)),
+          ]);
+
+          if (tmBindingSnap.exists()) {
+            const binding = tmBindingSnap.data();
+            const boundMo = String(binding.mainMoNumber || "").trim();
+            if (boundMo && boundMo.toUpperCase() !== mainMoNumber.toUpperCase()) {
+              throw new Error(
+                `TM Hasil ${resultTmNumber} sudah terikat ke MO Utama ${boundMo}, bukan ${mainMoNumber}.`
+              );
+            }
+          }
+
+          const storedSequence = batchSequenceSnap.exists()
+            ? Number(batchSequenceSnap.data()?.lastNumber || 0)
+            : 0;
+          const nextSequence = Math.max(storedSequence, existingSequenceMax) + 1;
+          newBatchId = `${targetSku.id}-${productionDateCode}-${String(nextSequence).padStart(2, "0")}`;
 
           materialSnaps.forEach((snap, index) => {
             if (!snap.exists()) {
@@ -1622,7 +1651,6 @@ export default function App() {
             });
           });
 
-          const primaryMaterial = selectedMaterials[0];
           const sourceWarehouses = [
             ...new Set(selectedMaterials.map((m) => m.sourceWarehouse).filter(Boolean)),
           ].join(", ");
@@ -1663,7 +1691,9 @@ export default function App() {
             moNumber: sourceMoNumbers.join(", "),
             sourceMoNumbers,
             sourceTmNumbers,
+            mainMoNumber,
             resultTmNumber,
+            batchDateCode: productionDateCode,
             expiryDate: formData.rebagExpiryDate,
             productionDate: date,
             executor: "KOPEL JAYA",
@@ -1706,7 +1736,9 @@ export default function App() {
               moNumber: sourceMoNumbers.join(", "),
               sourceMoNumbers,
               sourceTmNumbers,
+              mainMoNumber,
               resultTmNumber,
+              batchDateCode: productionDateCode,
               targetStack: formData.rebagTargetStack,
               sourceWarehouse: sourceWarehouses,
               sourceBatchId: primaryMaterial?.batchId || "",
@@ -1746,6 +1778,59 @@ export default function App() {
               ...auditMeta,
             }
           );
+
+          const existingBinding = tmBindingSnap.exists() ? tmBindingSnap.data() : {};
+          transaction.set(tmBindingRef, {
+            resultTmNumber,
+            mainMoNumber,
+            firstProductionAt: existingBinding.firstProductionAt || date,
+            firstTransactionId: existingBinding.firstTransactionId || txId,
+            firstBatchId: existingBinding.firstBatchId || newBatchId,
+            lastProductionAt: date,
+            lastTransactionId: txId,
+            lastBatchId: newBatchId,
+            productionCount: Number(existingBinding.productionCount || 0) + 1,
+            updatedBy: currentUser.username,
+          });
+
+          transaction.set(batchSequenceRef, {
+            skuId: targetSku.id,
+            productionDateCode,
+            lastNumber: Number(newBatchId.split("-").pop() || 0),
+            lastBatchId: newBatchId,
+            updatedAt: date,
+          });
+
+          selectedMaterials.forEach((material, index) => {
+            const materialDamageQty = Number(material.damageQty || 0);
+            if (materialDamageQty <= 0) return;
+
+            const damageTxId = `TRX-MAT-DMG-${timestamp}-${index + 1}`;
+            transaction.set(
+              doc(db, "artifacts", appId, "public", "data", "transactions", damageTxId),
+              {
+                id: damageTxId,
+                parentTransactionId: txId,
+                date,
+                type: "MATERIAL_DAMAGE",
+                skuId: material.skuId,
+                skuName: material.skuName,
+                batchId: material.batchId,
+                qtyChange: materialDamageQty,
+                damageQty: materialDamageQty,
+                unit: material.unit,
+                moNumber: material.moNumber,
+                tmNumber: material.tmNumber,
+                resultTmNumber,
+                mainMoNumber,
+                sourceWarehouse: material.sourceWarehouse,
+                cause: "Kerusakan saat proses Rebagging",
+                operator: currentUser.username,
+                stockAlreadyApplied: true,
+                ...auditMeta,
+              }
+            );
+          });
         });
       } else if (activeOpTab === "outbound") {
         const sku = skus.find((s) => s.id === formData.outSkuId);
