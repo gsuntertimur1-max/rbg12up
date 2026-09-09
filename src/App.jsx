@@ -557,7 +557,7 @@ async function generateFinishedGoodsStockCardPdf({ sku, batches, transactions })
     )
     .map((t) => ({
       kind: "IN",
-      date: t.productionDate || t.date,
+      date: t.type === "PROCESS_TO_GOOD" ? t.date : (t.productionDate || t.date),
       batchId: t.batchId || "",
       qty:
         t.type === "PROCESS_TO_GOOD"
