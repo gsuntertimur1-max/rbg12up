@@ -476,12 +476,12 @@ async function generateRebaggingBatchPdf(tx) {
   txt("Pelaksana", 20, 124.5);
   txt(":", 79, 124.5);
   txt(tx.executor || "KOPEL JAYA", 86, 124.5, { bold: true });
-  txt("No. MO", 20, 133.5);
+  txt("MO Utama", 20, 133.5);
   txt(":", 79, 133.5);
-  txt(tx.moNumber || "", 86, 133.5, { bold: true });
-  txt("Tanggal", 341.5, 133.5);
+  txt(tx.mainMoNumber || getPrimaryMoNumber(tx) || "", 86, 133.5, { bold: true });
+  txt("TM Hasil", 341.5, 133.5);
   txt(":", 397, 133.5);
-  txt(formatPdfDate(tx.productionDate || tx.date), 404, 133.5, { bold: true });
+  txt(tx.resultTmNumber || "", 404, 133.5, { bold: true });
 
   section("1. KESIAPAN", 136);
   const readyRows = [
@@ -522,37 +522,83 @@ async function generateRebaggingBatchPdf(tx) {
   txt("Pengawas", 474, 242.5, { bold: true, align: "center" });
 
   const sourceQty = Number(tx.sourceQty ?? tx.processedQty ?? tx.qtyChange ?? 0);
+  const outputQty = Number(tx.outputQty ?? tx.processedQty ?? 0);
   const finishedQty = Number(tx.finishedQty ?? tx.goodQty ?? tx.qtyChange ?? 0);
   const goodQty = Number(tx.goodQty ?? finishedQty ?? 0);
   const processQty = Number(tx.processQty ?? 0);
   const damageQty = Number(tx.damageQty ?? 0);
   const reconciledQty = goodQty + processQty + damageQty;
+  const netWeightKg = Number(
+    tx.netWeightKg ?? outputQty * Number(tx.weightPerPackKg || 0)
+  );
   const sourceUnit = tx.sourceUnit || "KG";
   const finishedUnit = tx.finishedUnit || tx.unit || "Pack";
   const executor = tx.executor || "KOPEL JAYA";
   const supervisor = tx.supervisor || tx.operator || "";
+
+  const groupedMaterials = {};
+  if (Array.isArray(tx.materials)) {
+    tx.materials.forEach((material) => {
+      const key = `${material.skuId || "UNKNOWN"}|${material.unit || ""}`;
+      if (!groupedMaterials[key]) {
+        groupedMaterials[key] = {
+          skuId: material.skuId || "",
+          skuName: material.skuName || material.skuId || "",
+          unit: material.unit || "",
+          usedQty: 0,
+          damageQty: 0,
+          standardQty:
+            material.standardQty !== null && material.standardQty !== undefined
+              ? Number(material.standardQty)
+              : null,
+          batchIds: new Set(),
+        };
+      }
+
+      const damage = Number(material.damageQty || 0);
+      const total = Number(material.totalQty ?? material.qty ?? 0);
+      const used = Number(material.usedQty ?? Math.max(0, total - damage));
+
+      groupedMaterials[key].usedQty += used;
+      groupedMaterials[key].damageQty += damage;
+      if (material.batchId) groupedMaterials[key].batchIds.add(material.batchId);
+    });
+  }
+
+  const materialRows = Object.values(groupedMaterials)
+    .slice(0, 5)
+    .map((material) => {
+      const batchCount = material.batchIds.size;
+      const name = `${material.skuId} ${material.skuName}${batchCount > 1 ? ` (${batchCount} batch)` : ""}`.trim();
+      const standard =
+        material.standardQty !== null && Number.isFinite(material.standardQty)
+          ? `${formatStockNumber(material.standardQty)} ${material.unit}`
+          : "-";
+      const actual =
+        `${formatStockNumber(material.usedQty)} ${material.unit}` +
+        (material.damageQty > 0
+          ? ` + rusak ${formatStockNumber(material.damageQty)}`
+          : "");
+      return [name, standard, actual, executor, supervisor];
+    });
+
   const materials =
-    Array.isArray(tx.materials) && tx.materials.length > 0
-      ? tx.materials.slice(0, 5).map((m) => [
-          `${m.skuId || ""} ${m.skuName || ""}`.trim(),
-          `${m.usedQty ?? m.qty ?? ""} ${m.unit || ""}${Number(m.damageQty || 0) > 0 ? ` + rusak ${m.damageQty}` : ""}`.trim(),
-          executor,
-          supervisor,
-        ])
+    materialRows.length > 0
+      ? materialRows
       : [
-          ["Gula Curah", sourceQty ? sourceQty + " " + sourceUnit : "", executor, supervisor],
-          ["Plastik PP 1 Kg", finishedQty ? finishedQty + " " + finishedUnit : "", executor, supervisor],
-          ["Karton", "", "", ""],
-          ["Lakban", "", "", ""],
-          ["Tinta Inkjet Exp Date", "", "", ""],
+          ["Bahan Baku Utama", "-", sourceQty ? sourceQty + " " + sourceUnit : "", executor, supervisor],
+          ["Produk Jadi", "-", finishedQty ? finishedQty + " " + finishedUnit : "", executor, supervisor],
         ];
+
   materials.forEach((row, i) => {
     const y = 251.5 + i * 9;
-    txt(row[0], 20, y);
-    txt(row[1], 320, y, { align: "center" });
-    txt(row[2], 359, y, { align: "center", size: 5.4 });
-    txt(row[3], 474, y, { align: "center", size: 5.4 });
+    txt(row[0], 20, y, { maxWidth: 142 });
+    txt(row[1], 234, y, { align: "center", size: 5.8 });
+    txt(row[2], 320, y, { align: "center", size: 5.8 });
+    txt(row[3], 359, y, { align: "center", size: 5.4 });
+    txt(row[4], 474, y, { align: "center", size: 5.4 });
   });
+
 
   section("4. PROSES REBAGGING", 299);
   const steps = [
@@ -597,20 +643,24 @@ async function generateRebaggingBatchPdf(tx) {
   line(L, 533, R, 533);
   line(L, 561, R, 561);
   [166.7, 339.7, 448.2].forEach((x) => line(x, 533, x, 561));
-  txt("Besaran Batch", 20, 540.5);
-  txt("Jumlah Aktual Produk Jadi", 169, 540.5);
-  txt("Selisih", 342, 540.5);
-  txt("Paraf", 451, 540.5);
-  txt(sourceQty ? sourceQty + " " + sourceUnit : "", 20, 553, { bold: true });
-  txt(finishedQty ? finishedQty + " " + finishedUnit : "", 169, 553, { bold: true });
-  if (Number.isFinite(sourceQty) && Number.isFinite(reconciledQty)) {
-    txt(String(reconciledQty - sourceQty), 342, 553, { bold: true });
-  }
+  txt("Output Produksi", 20, 540.5);
+  txt("Berat Netto", 169, 540.5);
+  txt("GOOD / PROCESS / DAMAGE", 342, 540.5, { size: 5.6 });
+  txt("Status", 451, 540.5);
+  txt(formatStockNumber(outputQty) + " Pack", 20, 553, { bold: true });
+  txt(formatStockNumber(netWeightKg) + " Kg", 169, 553, { bold: true });
+  txt("G:" + goodQty + " / P:" + processQty + " / D:" + damageQty, 342, 553, { bold: true, size: 5.7 });
   txt(
-    "GOOD: " + goodQty + " | PROCESS: " + processQty + " | DAMAGE: " + damageQty,
-    169,
+    Math.abs(reconciledQty - outputQty) <= 0.0001 ? "SEIMBANG" : "TIDAK SESUAI",
+    451,
+    553,
+    { bold: true }
+  );
+  txt(
+    "Bahan baku/kemasan direkap per SKU dan satuannya; tidak dibandingkan langsung dengan Pack produk jadi.",
+    20,
     559,
-    { size: 5.2, bold: true }
+    { size: 4.8, bold: true, maxWidth: 540 }
   );
 
   section("7. PENYIMPANAN PRODUK JADI", 561);
@@ -706,16 +756,14 @@ async function generateRawMaterialStockCardPdf({ sku, batches, transactions }) {
     0
   );
   const firstInbound = inbound[0];
-  const moNumber =
-    inbound.find((x) => x.moNumber)?.moNumber ||
-    batches.find((b) => b.moNumber)?.moNumber ||
-    transactions.find(
-      (t) =>
-        t.type === "REBAGGING" &&
-        (t.sourceSkuId === sku.id || matchingBatchIds.has(t.sourceBatchId)) &&
-        t.moNumber
-    )?.moNumber ||
-    "";
+  const moNumber = [
+    ...new Set(
+      [
+        ...inbound.map((item) => item.moNumber),
+        ...batches.map((batch) => batch.moNumber),
+      ].filter(Boolean)
+    ),
+  ].join(", ");
   const stackLocation =
     [...new Set(batches.map((b) => b.stackNumber || b.targetStack).filter(Boolean))].join(", ");
 
@@ -762,7 +810,7 @@ async function generateRawMaterialStockCardPdf({ sku, batches, transactions }) {
     ["Nama Produk", sku.name || ""],
     ["Nomor MO", moNumber],
     ["Tanggal Masuk Gudang", firstInbound ? formatPdfDate(firstInbound.date) : ""],
-    ["Jumlah Karung/Karton", currentStock ? formatStockNumber(currentStock) + " " + (sku.unit || "") : ""],
+    ["Jumlah Stok Aktif", currentStock ? formatStockNumber(currentStock) + " " + (sku.unit || "") : ""],
     ["Lokasi Tumpukan", stackLocation],
   ];
   meta.forEach((row, i) => {
@@ -788,10 +836,10 @@ async function generateRawMaterialStockCardPdf({ sku, batches, transactions }) {
 
   const headers = [
     ["Tanggal Masuk", (L + 132) / 2],
-    ["Jumlah (kg)", (132 + 210) / 2],
+    [`Jumlah (${String(sku.unit || "").toUpperCase() || "UNIT"})`, (132 + 210) / 2],
     ["No. Tumpukan", (210 + 314) / 2],
     ["Tanggal Keluar", (314 + 407) / 2],
-    ["Jumlah (kg)", (407 + 468) / 2],
+    [`Jumlah (${String(sku.unit || "").toUpperCase() || "UNIT"})`, (407 + 468) / 2],
     ["Sisa", (468 + 528) / 2],
     ["Paraf", (528 + R) / 2],
   ];
