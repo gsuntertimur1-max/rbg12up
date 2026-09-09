@@ -2343,6 +2343,8 @@ export default function App() {
   const [qcSaving, setQcSaving] = useState(false);
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [qcHistoryPage, setQcHistoryPage] = useState(1);
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
   const [traceTmQuery, setTraceTmQuery] = useState("");
@@ -4229,6 +4231,48 @@ Masukkan alasan override Super Admin:`
     { name: "Released FG", value: dashboardSummary.releasedFinished },
   ];
 
+  const historyFilteredTransactions = useMemo(() => {
+    return transactions.filter((transaction) => {
+      const txDate = new Date(transaction.date);
+      if (Number.isNaN(txDate.getTime())) return false;
+
+      if (historyStartDate) {
+        const start = new Date(historyStartDate);
+        start.setHours(0, 0, 0, 0);
+        if (txDate < start) return false;
+      }
+
+      if (historyEndDate) {
+        const end = new Date(historyEndDate);
+        end.setHours(23, 59, 59, 999);
+        if (txDate > end) return false;
+      }
+
+      return true;
+    });
+  }, [transactions, historyStartDate, historyEndDate]);
+
+  const HISTORY_PAGE_SIZE = 10;
+  const historyPageCount = Math.max(
+    1,
+    Math.ceil(historyFilteredTransactions.length / HISTORY_PAGE_SIZE)
+  );
+  const effectiveHistoryPage = Math.min(historyPage, historyPageCount);
+  const paginatedHistoryTransactions = historyFilteredTransactions.slice(
+    (effectiveHistoryPage - 1) * HISTORY_PAGE_SIZE,
+    effectiveHistoryPage * HISTORY_PAGE_SIZE
+  );
+
+  const qcHistoryPageCount = Math.max(
+    1,
+    Math.ceil(qcRecords.length / HISTORY_PAGE_SIZE)
+  );
+  const effectiveQcHistoryPage = Math.min(qcHistoryPage, qcHistoryPageCount);
+  const paginatedQcRecords = qcRecords.slice(
+    (effectiveQcHistoryPage - 1) * HISTORY_PAGE_SIZE,
+    effectiveQcHistoryPage * HISTORY_PAGE_SIZE
+  );
+
   const reportTransactions = useMemo(() => {
     return transactions.filter((t) => {
       const txDate = new Date(t.date);
@@ -5133,15 +5177,28 @@ Masukkan alasan override Super Admin:`
           <button onClick={()=>handleNavClick("reports")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="reports"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><ClipboardList size={18}/> Laporan Produksi</button>
           {hasAccess(["Super Admin"]) && <button onClick={()=>handleNavClick("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
         </nav>
-        
-        <div className="px-4 py-3 bg-slate-800 mx-4 rounded-lg mb-2 text-center text-xs border border-slate-700">
-          <p className="text-slate-400">Login sebagai:</p>
-          <p className="font-bold text-white truncate">{currentUser.username}</p>
-        </div>
-        <button onClick={handleLogout} className="mx-4 mb-4 p-3 bg-slate-800 hover:bg-red-600 transition-colors rounded-lg flex justify-center items-center gap-2 text-slate-300 hover:text-white font-bold"><LogOut size={16}/> Keluar</button>
       </aside>
 
       <main className="flex-1 p-4 sm:p-8 overflow-y-auto w-full bg-slate-50">
+        <div className="max-w-7xl mx-auto mb-5 flex justify-end">
+          <div className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-1.5 pl-2.5 shadow-sm">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white">
+              <UserRound size={17}/>
+            </div>
+            <div className="hidden min-w-0 sm:block pr-2">
+              <div className="max-w-[180px] truncate text-xs font-black text-slate-800">{currentUser.username}</div>
+              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{currentUser.role}</div>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2.5 text-xs font-black text-red-600 transition-colors hover:bg-red-600 hover:text-white"
+              title="Keluar dari aplikasi"
+            >
+              <LogOut size={15}/> <span className="hidden sm:inline">Keluar</span>
+            </button>
+          </div>
+        </div>
         <div className="max-w-7xl mx-auto">
           
           {/* DASHBOARD */}
@@ -6608,7 +6665,36 @@ Masukkan alasan override Super Admin:`
                 </form>
                 <div className="space-y-4"><div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Pending QC</div><div className="mt-3 grid grid-cols-2 gap-3"><div className="rounded-xl bg-blue-50 p-3"><div className="text-[10px] font-black text-blue-500">BAHAN</div><div className="mt-1 text-2xl font-black text-blue-800">{inventoryBatches.filter(batch=>{const sku=skus.find(item=>item.id===batch.skuId);return sku?.type==="bulk"&&batch.qcStatus==="PENDING_QC";}).length}</div></div><div className="rounded-xl bg-emerald-50 p-3"><div className="text-[10px] font-black text-emerald-500">PRODUK JADI</div><div className="mt-1 text-2xl font-black text-emerald-800">{inventoryBatches.filter(batch=>{const sku=skus.find(item=>item.id===batch.skuId);return sku?.type==="rebagged"&&batch.qcStatus==="PENDING_QC";}).length}</div></div></div></div><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-800"><strong>Batch lama tanpa qcStatus</strong> diperlakukan sebagai LEGACY agar transaksi lama tidak terblokir. Batch baru wajib melalui QC.</div></div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden"><div className="border-b border-slate-200 p-4 sm:p-5"><h3 className="font-black text-slate-900">Riwayat QC</h3><p className="mt-1 text-xs text-slate-500">Setiap keputusan QC tersimpan dan dapat diunduh PDF.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Tanggal</th><th className="p-3 text-left">Jenis</th><th className="p-3 text-left">Batch / Produk</th><th className="p-3 text-left">MO / TM</th><th className="p-3 text-center">Keputusan</th><th className="p-3 text-left">Petugas</th><th className="p-3 text-center">Dokumen</th></tr></thead><tbody className="divide-y divide-slate-100">{qcRecords.map(record=>(<tr key={record.id} className="hover:bg-slate-50"><td className="p-3 whitespace-nowrap">{new Date(record.inspectedAt).toLocaleString("id-ID")}</td><td className="p-3 font-black text-xs">{record.qcType==="INCOMING"?"BAHAN MASUK":"PRODUK JADI"}</td><td className="p-3"><div className="font-mono text-xs font-black text-blue-700">{record.batchId}</div><div className="mt-1 text-xs text-slate-600">{record.skuName}</div></td><td className="p-3 text-xs">{record.qcType==="INCOMING"?((record.moNumber||"-")+" / "+(record.tmNumber||"-")):((record.mainMoNumber||"-")+" / "+(record.resultTmNumber||"-"))}</td><td className="p-3 text-center"><span className={"rounded-full px-3 py-1 text-[10px] font-black "+(["ACCEPT","RELEASE"].includes(record.decision)?"bg-emerald-100 text-emerald-700":record.decision==="HOLD"?"bg-amber-100 text-amber-700":"bg-red-100 text-red-700")}>{record.decision}</span></td><td className="p-3 text-xs">{record.inspectedBy}<div className="text-slate-400">{record.inspectedRole}</div></td><td className="p-3 text-center"><button type="button" onClick={()=>generateQcPdf(record)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 hover:bg-blue-100"><FileDown size={15}/> PDF QC</button></td></tr>))}</tbody></table>{qcRecords.length===0&&<div className="p-8 text-center text-sm italic text-slate-400">Belum ada rekaman QC.</div>}</div></div>
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden"><div className="border-b border-slate-200 p-4 sm:p-5"><h3 className="font-black text-slate-900">Riwayat QC</h3><p className="mt-1 text-xs text-slate-500">Setiap keputusan QC tersimpan dan dapat diunduh PDF.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Tanggal</th><th className="p-3 text-left">Jenis</th><th className="p-3 text-left">Batch / Produk</th><th className="p-3 text-left">MO / TM</th><th className="p-3 text-center">Keputusan</th><th className="p-3 text-left">Petugas</th><th className="p-3 text-center">Dokumen</th></tr></thead><tbody className="divide-y divide-slate-100">{paginatedQcRecords.map(record=>(<tr key={record.id} className="hover:bg-slate-50"><td className="p-3 whitespace-nowrap">{new Date(record.inspectedAt).toLocaleString("id-ID")}</td><td className="p-3 font-black text-xs">{record.qcType==="INCOMING"?"BAHAN MASUK":"PRODUK JADI"}</td><td className="p-3"><div className="font-mono text-xs font-black text-blue-700">{record.batchId}</div><div className="mt-1 text-xs text-slate-600">{record.skuName}</div></td><td className="p-3 text-xs">{record.qcType==="INCOMING"?((record.moNumber||"-")+" / "+(record.tmNumber||"-")):((record.mainMoNumber||"-")+" / "+(record.resultTmNumber||"-"))}</td><td className="p-3 text-center"><span className={"rounded-full px-3 py-1 text-[10px] font-black "+(["ACCEPT","RELEASE"].includes(record.decision)?"bg-emerald-100 text-emerald-700":record.decision==="HOLD"?"bg-amber-100 text-amber-700":"bg-red-100 text-red-700")}>{record.decision}</span></td><td className="p-3 text-xs">{record.inspectedBy}<div className="text-slate-400">{record.inspectedRole}</div></td><td className="p-3 text-center"><button type="button" onClick={()=>generateQcPdf(record)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 hover:bg-blue-100"><FileDown size={15}/> PDF QC</button></td></tr>))}</tbody></table>{qcRecords.length===0&&<div className="p-8 text-center text-sm italic text-slate-400">Belum ada rekaman QC.</div>}</div>
+                {qcRecords.length > 0 && (
+                  <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-xs font-bold text-slate-500">
+                      {(effectiveQcHistoryPage - 1) * HISTORY_PAGE_SIZE + 1}–{Math.min(effectiveQcHistoryPage * HISTORY_PAGE_SIZE, qcRecords.length)} dari {qcRecords.length} rekaman QC
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={effectiveQcHistoryPage <= 1}
+                        onClick={()=>setQcHistoryPage(Math.max(1,effectiveQcHistoryPage-1))}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Sebelumnya
+                      </button>
+                      <span className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-black text-white">
+                        {effectiveQcHistoryPage} / {qcHistoryPageCount}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={effectiveQcHistoryPage >= qcHistoryPageCount}
+                        onClick={()=>setQcHistoryPage(Math.min(qcHistoryPageCount,effectiveQcHistoryPage+1))}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Selanjutnya
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -6618,9 +6704,9 @@ Masukkan alasan override Super Admin:`
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-slate-200 pb-4 gap-4">
                 <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Riwayat Transaksi</h1>
                 <div className="flex flex-wrap gap-2 sm:gap-3 items-center w-full sm:w-auto">
-                  <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyStartDate} onChange={e=>setHistoryStartDate(e.target.value)} />
+                  <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyStartDate} onChange={e=>{setHistoryStartDate(e.target.value);setHistoryPage(1);}} />
                   <span className="text-slate-400 font-medium text-xs sm:text-sm">s.d</span>
-                  <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyEndDate} onChange={e=>setHistoryEndDate(e.target.value)} />
+                  <input type="date" className="border border-slate-300 p-2 rounded-lg text-xs sm:text-sm outline-none focus:border-red-500 text-slate-600 font-medium flex-1 sm:flex-none" value={historyEndDate} onChange={e=>{setHistoryEndDate(e.target.value);setHistoryPage(1);}} />
                   <button onClick={handleDownloadHistory} className="bg-green-600 hover:bg-green-700 transition-colors text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 font-bold shadow-md w-full sm:w-auto text-sm"><Download size={18}/> Export .xlsx</button>
                 </div>
               </div>
@@ -6638,7 +6724,7 @@ Masukkan alasan override Super Admin:`
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {transactions.map(t => (
+                    {paginatedHistoryTransactions.map(t => (
                       <tr key={t.id} className="hover:bg-slate-50 transition-colors">
                         <td className="p-4 text-slate-600 font-medium whitespace-nowrap">
                           <div>{new Date(t.date).toLocaleString('id-ID')}</div>
@@ -6713,7 +6799,35 @@ Masukkan alasan override Super Admin:`
                     ))}
                   </tbody>
                 </table>
-                {transactions.length === 0 && <div className="text-center text-slate-400 p-8 italic">Belum ada riwayat transaksi yang tercatat.</div>}
+                {historyFilteredTransactions.length === 0 && <div className="text-center text-slate-400 p-8 italic">Tidak ada riwayat transaksi pada filter yang dipilih.</div>}
+                {historyFilteredTransactions.length > 0 && (
+                  <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-xs font-bold text-slate-500">
+                      {(effectiveHistoryPage - 1) * HISTORY_PAGE_SIZE + 1}–{Math.min(effectiveHistoryPage * HISTORY_PAGE_SIZE, historyFilteredTransactions.length)} dari {historyFilteredTransactions.length} transaksi
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={effectiveHistoryPage <= 1}
+                        onClick={()=>setHistoryPage(Math.max(1,effectiveHistoryPage-1))}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Sebelumnya
+                      </button>
+                      <span className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-black text-white">
+                        {effectiveHistoryPage} / {historyPageCount}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={effectiveHistoryPage >= historyPageCount}
+                        onClick={()=>setHistoryPage(Math.min(historyPageCount,effectiveHistoryPage+1))}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Selanjutnya
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
