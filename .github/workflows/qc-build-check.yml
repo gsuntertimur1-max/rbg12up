@@ -1,0 +1,17 @@
+name: QC Module Build Check
+
+on:
+  push:
+    paths:
+      - ".github/workflows/qc-build-check.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run build
