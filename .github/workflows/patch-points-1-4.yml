@@ -1,0 +1,31 @@
+name: One-time Points 1 3 4 Core Patch
+
+on:
+  push:
+    paths:
+      - ".github/workflows/patch-points-1-4.yml"
+      - ".github/scripts/patch_points_1_3_4_core.py"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply core patch
+        run: python .github/scripts/patch_points_1_3_4_core.py
+      - name: Commit App changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx
+          if git diff --cached --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git commit -m "Add multibatch FEFO controls and safe test reset"
+          git push
