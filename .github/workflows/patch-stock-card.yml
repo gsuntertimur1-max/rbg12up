@@ -1,10 +1,10 @@
-name: One-time Stock Card Template Patch
+name: One-time Stock Card Final Polish
 
 on:
   push:
     paths:
       - ".github/workflows/patch-stock-card.yml"
-      - ".github/scripts/patch_stock_card_templates.py"
+      - ".github/scripts/patch_stock_card_final_polish.py"
 
 permissions:
   contents: write
@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Apply stock card patch
-        run: python .github/scripts/patch_stock_card_templates.py
+      - name: Apply final stock card polish
+        run: python .github/scripts/patch_stock_card_final_polish.py
       - name: Commit App changes
         run: |
           git config user.name "github-actions[bot]"
@@ -27,5 +27,5 @@ jobs:
             echo "No changes."
             exit 0
           fi
-          git commit -m "Match stock card PDFs to warehouse templates"
+          git commit -m "Polish stock card merged headers and signatures"
           git push
