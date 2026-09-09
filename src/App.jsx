@@ -4428,10 +4428,38 @@ Masukkan alasan override Super Admin:`
 
     try {
       setQcSaving(true);
+      const relatedOperationalTx = transactions.find((item) =>
+        isIncoming
+          ? item.type === "INBOUND" && item.batchId === batch.batchId
+          : item.type === "REBAGGING" && item.batchId === batch.batchId
+      );
+
       await runTransaction(db, async (transaction) => {
         const batchRef = doc(db, "artifacts", appId, "public", "data", "batches", batch.batchId);
+        const relatedTxRef = relatedOperationalTx?.id
+          ? doc(db, "artifacts", appId, "public", "data", "transactions", relatedOperationalTx.id)
+          : null;
+
         const batchSnap = await transaction.get(batchRef);
+        const relatedTxSnap = relatedTxRef ? await transaction.get(relatedTxRef) : null;
         if (!batchSnap.exists()) throw new Error("Batch sudah tidak ditemukan.");
+
+        const liveBatch = batchSnap.data();
+        const releaseMeta = !isIncoming
+          ? {
+              qualityControl: {
+                ...(liveBatch.qualityControl || {}),
+                releaseStatus: qcForm.decision,
+                releaseBy: currentUser.username,
+                releaseRole: currentUser.role,
+                releaseDate: inspectedAt,
+                releaseNote:
+                  String(qcForm.inspectionNote || "").trim() ||
+                  String(qcForm.nonconformity || "").trim(),
+              },
+            }
+          : {};
+
         transaction.update(batchRef, {
           qcStatus: batchStatus,
           qcType: record.qcType,
@@ -4439,7 +4467,33 @@ Masukkan alasan override Super Admin:`
           qcUpdatedAt: inspectedAt,
           qcUpdatedBy: currentUser.username,
           qcDecision: qcForm.decision,
+          ...releaseMeta,
         });
+
+        if (relatedTxRef && relatedTxSnap?.exists()) {
+          const liveTx = relatedTxSnap.data();
+          transaction.update(relatedTxRef, {
+            qcStatus: batchStatus,
+            qcLastRecordId: recordId,
+            qcUpdatedAt: inspectedAt,
+            qcUpdatedBy: currentUser.username,
+            ...(!isIncoming
+              ? {
+                  qualityControl: {
+                    ...(liveTx.qualityControl || {}),
+                    releaseStatus: qcForm.decision,
+                    releaseBy: currentUser.username,
+                    releaseRole: currentUser.role,
+                    releaseDate: inspectedAt,
+                    releaseNote:
+                      String(qcForm.inspectionNote || "").trim() ||
+                      String(qcForm.nonconformity || "").trim(),
+                  },
+                }
+              : {}),
+          });
+        }
+
         transaction.set(doc(db, "artifacts", appId, "public", "data", "qc_records", recordId), record);
       });
       showNotif(isIncoming ? `QC bahan: ${qcForm.decision}` : `QC produk jadi: ${qcForm.decision}`);
