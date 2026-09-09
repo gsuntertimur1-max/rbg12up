@@ -2403,26 +2403,72 @@ export default function App() {
     const query = String(traceTmQuery || "").trim().toUpperCase();
     if (!query) return [];
 
-    return transactions
-      .filter(
+    const productions = transactions.filter(
+      (t) =>
+        t.type === "REBAGGING" &&
+        String(t.resultTmNumber || "").toUpperCase().includes(query)
+    );
+    const grouped = {};
+
+    productions.forEach((production) => {
+      const resultTmNumber = String(production.resultTmNumber || "").trim();
+      const mainMoNumber = getPrimaryMoNumber(production);
+      const key = `${resultTmNumber.toUpperCase()}|${mainMoNumber.toUpperCase()}`;
+
+      if (!grouped[key]) {
+        grouped[key] = { resultTmNumber, mainMoNumber, productions: [] };
+      }
+      grouped[key].productions.push(production);
+    });
+
+    return Object.entries(grouped).map(([key, group]) => {
+      const productionIds = new Set(group.productions.map((p) => p.id));
+      const sortedProductions = group.productions
+        .slice()
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+      const first = sortedProductions[0];
+
+      const totals = sortedProductions.reduce(
+        (acc, p) => {
+          acc.outputPack += Number(p.outputQty ?? p.processedQty ?? 0);
+          acc.outputKg += Number(p.netWeightKg || 0);
+          return acc;
+        },
+        { outputPack: 0, outputKg: 0 }
+      );
+
+      const production = {
+        ...first,
+        id: `TRACE-${key}`,
+        mainMoNumber: group.mainMoNumber,
+        resultTmNumber: group.resultTmNumber,
+        batchCount: sortedProductions.length,
+        outputQty: totals.outputPack,
+        netWeightKg: totals.outputKg,
+        materials: sortedProductions.flatMap((p) =>
+          (Array.isArray(p.materials) ? p.materials : []).map((material) => ({
+            ...material,
+            productionBatchId: p.batchId || "",
+            productionDate: p.date || "",
+          }))
+        ),
+      };
+
+      const outbound = transactions.filter(
         (t) =>
-          t.type === "REBAGGING" &&
-          String(t.resultTmNumber || "").toUpperCase().includes(query)
-      )
-      .map((production) => ({
-        production,
-        outbound: transactions.filter(
-          (t) =>
-            t.type === "OUTBOUND" &&
-            String(t.resultTmNumber || "").trim().toUpperCase() ===
-              String(production.resultTmNumber || "").trim().toUpperCase()
-        ),
-        materialDamage: transactions.filter(
-          (t) =>
-            t.type === "MATERIAL_DAMAGE" &&
-            String(t.parentTransactionId || "") === production.id
-        ),
-      }));
+          t.type === "OUTBOUND" &&
+          String(t.resultTmNumber || "").trim().toUpperCase() ===
+            group.resultTmNumber.toUpperCase()
+      );
+
+      const materialDamage = transactions.filter(
+        (t) =>
+          t.type === "MATERIAL_DAMAGE" &&
+          productionIds.has(String(t.parentTransactionId || ""))
+      );
+
+      return { production, outbound, materialDamage };
+    });
   }, [transactions, traceTmQuery]);
 
   const handleDownloadProductionReport = () => {
@@ -2431,6 +2477,8 @@ export default function App() {
         Tanggal: new Date(t.date).toLocaleString("id-ID"),
         SKU: t.skuId,
         Produk: t.skuName,
+        "Nomor Batch": t.batchId || "",
+        "MO Utama": getPrimaryMoNumber(t),
         "TM Hasil": t.resultTmNumber || "",
         "Versi Komposisi": t.recipeVersion || 1,
         "Output Pack": t.outputQty,
@@ -3237,12 +3285,17 @@ export default function App() {
                                   Setiap bahan boleh berasal dari gudang, MO, dan TM yang berbeda. MO/TM mengikuti batch yang dipilih.
                                 </p>
                                 <div className="mt-3 flex flex-wrap gap-2">
-                                  {activeRebagMaterials.map((item)=>(
+                                  {activeRebagMaterials.map((item,index)=>(
                                     <span key={item.skuId} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">
                                       {item.skuId}
                                       <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black ${item.required ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
                                         {item.required ? 'WAJIB' : 'OPSIONAL'}
                                       </span>
+                                      {index === 0 && (
+                                        <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-black text-violet-700">
+                                          MO UTAMA
+                                        </span>
+                                      )}
                                       {item.calculationMode === 'per_output' && (
                                         <span className="rounded-full bg-green-50 px-1.5 py-0.5 text-[9px] font-black text-green-700">
                                           AUTO 1/{item.outputPerUnit}
@@ -3278,7 +3331,7 @@ export default function App() {
                         {activeRebagRecipe && (
                           <div className="space-y-3">
                             <h4 className="font-black text-slate-800">Pilih Batch Bahan</h4>
-                            {activeRebagMaterials.map((recipeMaterial)=>{
+                            {activeRebagMaterials.map((recipeMaterial, materialIndex)=>{
                               const materialSkuId=recipeMaterial.skuId;
                               const materialSku=skus.find(s=>s.id===materialSkuId);
                               const selection=rebagMaterialSelections[materialSkuId]||{};
@@ -3300,6 +3353,11 @@ export default function App() {
                                       <div className="font-bold text-slate-800">{materialSku?.name || 'SKU belum ada di master'}</div>
                                     </div>
                                     <div className="flex flex-wrap justify-end gap-1.5">
+                                      {materialIndex === 0 && (
+                                        <span className="rounded-full bg-violet-50 px-2.5 py-1 text-[10px] font-black text-violet-700">
+                                          MO UTAMA / PENGIKAT TM
+                                        </span>
+                                      )}
                                       {recipeMaterial.calculationMode === 'per_output' && (
                                         <span className="rounded-full bg-green-50 px-2.5 py-1 text-[10px] font-black text-green-700">
                                           AUTO · 1/{recipeMaterial.outputPerUnit}
@@ -3437,7 +3495,10 @@ export default function App() {
                             placeholder="Masukkan TM hasil produksi"
                             required
                           />
-                          <p className="mt-2 text-xs text-green-700">TM Hasil dibuat pada proses Rebagging, menjadi referensi utama Outbound, dan harus unik untuk setiap produksi.</p>
+                          <div className="mt-2 space-y-1 text-xs text-green-700">
+                            <p>TM Hasil boleh digunakan kembali selama tetap terikat pada MO Utama yang sama.</p>
+                            <p className="font-bold">Batch otomatis: {formData.rebagTargetSkuId || 'SKU'}-{getProductionDateCode(formData.useBackdate && formData.backdateDateTime ? new Date(formData.backdateDateTime) : new Date()) || 'YYMMDD'}-NN</p>
+                          </div>
                         </div>
 
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
@@ -3825,7 +3886,7 @@ export default function App() {
                   <Search size={20} className="mt-1 shrink-0 text-blue-600"/>
                   <div className="flex-1">
                     <h3 className="text-lg font-black text-slate-900">Traceability TM Hasil</h3>
-                    <p className="mt-1 text-xs text-slate-500">Telusuri bahan, MO/TM sumber, komposisi versi produksi, material damage, dan outbound.</p>
+                    <p className="mt-1 text-xs text-slate-500">Satu TM Hasil dapat memiliki beberapa batch produksi selama semuanya terikat ke MO Utama yang sama.</p>
                     <input
                       type="text"
                       className="mt-4 w-full rounded-xl border border-blue-200 bg-blue-50/40 p-3 font-mono font-bold text-blue-900 outline-none focus:border-blue-500"
@@ -3845,7 +3906,7 @@ export default function App() {
                             <div className="font-mono text-sm font-black text-green-700">{production.resultTmNumber}</div>
                             <div className="mt-1 text-lg font-black text-slate-900">{production.skuName}</div>
                             <div className="mt-1 text-xs text-slate-500">
-                              {new Date(production.date).toLocaleString('id-ID')} · Komposisi v{production.recipeVersion||1}
+                              MO Utama: <span className="font-black text-violet-700">{getPrimaryMoNumber(production)||'-'}</span> · {production.batchCount||1} batch produksi
                             </div>
                           </div>
                           <div className="rounded-xl bg-white px-4 py-3 text-right shadow-sm">
@@ -3861,9 +3922,12 @@ export default function App() {
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                               {(production.materials||[]).map(material=>(
-                                <tr key={`${production.id}-${material.skuId}`}>
+                                <tr key={`${production.id}-${material.productionBatchId||''}-${material.skuId}`}>
                                   <td className="p-2"><div className="font-bold text-slate-800">{material.skuName}</div><div className="font-mono text-[10px] text-slate-400">{material.skuId}</div></td>
-                                  <td className="p-2 font-mono text-[10px] text-slate-500">{material.batchId}</td>
+                                  <td className="p-2 text-[10px] text-slate-500">
+                                    <div className="font-mono font-black text-blue-600">Prod: {material.productionBatchId||'-'}</div>
+                                    <div className="mt-0.5 font-mono">Bahan: {material.batchId}</div>
+                                  </td>
                                   <td className="p-2">{material.moNumber||'-'}</td>
                                   <td className="p-2">{material.tmNumber||'-'}</td>
                                   <td className="p-2 text-right font-bold">{Number(material.usedQty??material.qty??0).toLocaleString('id-ID')} {material.unit}</td>
