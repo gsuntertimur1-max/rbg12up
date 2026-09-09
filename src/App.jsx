@@ -224,6 +224,54 @@ const sortBatchesFefoFifo = (batches, referenceDate = new Date()) =>
     return aDate - bDate;
   });
 
+
+const getQcStatusLabel = (batch) => {
+  if (!batch?.qcStatus) return "LEGACY";
+  return batch.qcStatus;
+};
+
+const isRawBatchQcUsable = (batch) =>
+  !batch?.qcStatus || batch.qcStatus === "ACCEPTED";
+
+const isFinishedBatchQcReleased = (batch) =>
+  !batch?.qcStatus || batch.qcStatus === "RELEASED";
+
+const QC_INCOMING_CHECKS = [
+  ["packagingCondition", "Kondisi kemasan/karung baik"],
+  ["cleanDry", "Bahan bersih dan kering"],
+  ["contaminationFree", "Bebas kontaminasi, hama, dan benda asing"],
+  ["labelMatch", "Label / identitas / lot sesuai"],
+  ["expiryOk", "Tanggal kedaluwarsa masih memenuhi"],
+  ["quantityOk", "Jumlah penerimaan sesuai dokumen"],
+  ["coaAvailable", "COA / dokumen mutu tersedia atau diverifikasi"],
+];
+
+const QC_FINISHED_CHECKS = [
+  ["netWeightOk", "Berat netto sesuai spesifikasi"],
+  ["sealOk", "Seal kemasan rapat"],
+  ["leakFree", "Tidak ada kebocoran"],
+  ["printOk", "Kode produksi / Exp Date jelas dan terbaca"],
+  ["cartonOk", "Karton / kemasan sekunder baik"],
+  ["appearanceOk", "Penampilan produk sesuai"],
+  ["traceabilityOk", "Batch / MO / TM Hasil dapat ditelusuri"],
+];
+
+const createInitialQcForm = (type = "incoming") => {
+  const isIncoming = type === "incoming";
+  const checks = Object.fromEntries(
+    (isIncoming ? QC_INCOMING_CHECKS : QC_FINISHED_CHECKS).map(([key]) => [key, true])
+  );
+  return {
+    batchId: "",
+    decision: isIncoming ? "ACCEPT" : "RELEASE",
+    coaNumber: "",
+    inspectionNote: "",
+    nonconformity: "",
+    correctiveAction: "",
+    checks,
+  };
+};
+
 const getBatchRecommendationLabel = (batch, allBatches, referenceDate = new Date()) => {
   const sorted = sortBatchesFefoFifo(allBatches, referenceDate);
   const firstUsable = sorted.find((item) => !getBatchExpiryInfo(item, referenceDate).isExpired);
@@ -2275,6 +2323,7 @@ export default function App() {
   const [skus, setSkus] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [inventoryBatches, setInventoryBatches] = useState([]);
+  const [qcRecords, setQcRecords] = useState([]);
   const [rebagRecipes, setRebagRecipes] = useState(DEFAULT_REBAG_RECIPES);
   const [systemConfig, setSystemConfig] = useState(DEFAULT_SYSTEM_CONFIG);
   
@@ -2289,6 +2338,9 @@ export default function App() {
   const [dbLoading, setDbLoading] = useState(true);
   const [dbError, setDbError] = useState("");
   const [activeOpTab, setActiveOpTab] = useState("inbound");
+  const [activeQcTab, setActiveQcTab] = useState("incoming");
+  const [qcForm, setQcForm] = useState(createInitialQcForm("incoming"));
+  const [qcSaving, setQcSaving] = useState(false);
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
   const [reportStartDate, setReportStartDate] = useState("");
@@ -2438,6 +2490,14 @@ export default function App() {
       handleDbError("transaksi")
     );
 
+    const unsubQc = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "qc_records"),
+      (snap) => {
+        setQcRecords(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a,b)=>new Date(b.inspectedAt||0)-new Date(a.inspectedAt||0)));
+      },
+      handleDbError("quality control")
+    );
+
     const unsubConfig = onSnapshot(
       doc(db, "artifacts", appId, "public", "data", "config", "system"),
       (snap) => {
@@ -2456,6 +2516,7 @@ export default function App() {
       unsubBatches();
       unsubRecipes();
       unsubTx();
+      unsubQc();
       unsubConfig();
     };
   }, [fbUser]);
@@ -2525,7 +2586,8 @@ export default function App() {
             (b) =>
               b.skuId === formData.outSkuId &&
               Number(b.currentQty || 0) > 0 &&
-              b.resultTmNumber
+              b.resultTmNumber &&
+              isFinishedBatchQcReleased(b)
           )
           .map((b) => b.resultTmNumber)
       ),
@@ -2762,6 +2824,8 @@ export default function App() {
               sourceWarehouse: line.sourceWarehouse,
               moNumber: line.moNumber,
               tmNumber: line.tmNumber,
+              qcStatus: "PENDING_QC",
+              qcType: "INCOMING",
               date,
               ...auditMeta,
             }
@@ -3225,6 +3289,9 @@ Masukkan alasan override Super Admin:`
             const liveQty = Number(liveBatch.currentQty) || 0;
             const requestedQty = Number(selectedMaterials[index].qty) || 0;
 
+            if (!isRawBatchQcUsable(liveBatch)) {
+              throw new Error(`Batch bahan ${selectedMaterials[index].batchId} belum ACCEPT QC atau sedang HOLD/REJECT.`);
+            }
             if (requestedQty > liveQty) {
               throw new Error(
                 `Pemakaian ${selectedMaterials[index].skuId} melebihi stok terbaru (${liveQty}).`
@@ -3286,6 +3353,8 @@ Masukkan alasan override Super Admin:`
             resultTmNumber,
             batchDateCode: productionDateCode,
             expiryDate: formData.rebagExpiryDate,
+            qcStatus: "PENDING_QC",
+            qcType: "FINISHED",
             productionDate: date,
             executor: "KOPEL JAYA",
             supervisor: currentUser.username,
@@ -3549,6 +3618,9 @@ Masukkan alasan override Super Admin:`
             const liveQty = Number(liveBatch.currentQty) || 0;
             if (liveBatch.skuId !== sku.id) {
               throw new Error(`Batch ${selections[index].batchId} tidak sesuai SKU yang dipilih.`);
+            }
+            if (isFinishedGoods ? !isFinishedBatchQcReleased(liveBatch) : !isRawBatchQcUsable(liveBatch)) {
+              throw new Error(isFinishedGoods ? `Batch ${selections[index].batchId} belum RELEASE QC.` : `Batch ${selections[index].batchId} belum ACCEPT QC.`);
             }
             if (selections[index].qty > liveQty) {
               throw new Error(
@@ -4317,6 +4389,8 @@ Masukkan alasan override Super Admin:`
       "tm_mo_bindings",
       "batch_sequences",
       "result_tms",
+      "qc_records",
+      "qc_records",
     ];
 
     const snapshots = {};
@@ -4340,6 +4414,7 @@ Masukkan alasan override Super Admin:`
       ["tm_mo_bindings", "TM-MO"],
       ["batch_sequences", "Batch Sequence"],
       ["result_tms", "Legacy TM"],
+      ["qc_records", "Quality Control"],
     ];
 
     sheetMap.forEach(([key, sheetName]) => {
@@ -5118,7 +5193,7 @@ Masukkan alasan override Super Admin:`
                                 : new Date();
                               const batchOptions=sortBatchesFefoFifo(
                                 inventoryBatches.filter(
-                                  b=>b.skuId===materialSkuId && Number(b.currentQty||0)>0
+                                  b=>b.skuId===materialSkuId && Number(b.currentQty||0)>0 && isRawBatchQcUsable(b)
                                 ),
                                 referenceDate
                               );
@@ -5348,7 +5423,7 @@ Masukkan alasan override Super Admin:`
                                 <label className="block text-sm font-bold text-slate-700 mb-2">Batch Bahan Baku</label>
                                 <SearchableSelect
                                   options={sortBatchesFefoFifo(
-                                    inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && Number(b.currentQty||0)>0)
+                                    inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && Number(b.currentQty||0)>0 && isRawBatchQcUsable(b))
                                   ).map(b=>({
                                     value:b.batchId,
                                     label:`[${getBatchRecommendationLabel(b,inventoryBatches.filter(x=>x.skuId===formData.bulkSkuId && Number(x.currentQty||0)>0))}] ${b.sourceWarehouse||'-'} · MO: ${b.moNumber||'-'} · TM: ${b.tmNumber||'-'} · Stok: ${b.currentQty}${b.expiryDate?` · Exp: ${formatPdfDate(b.expiryDate)}`:''}`
@@ -5557,13 +5632,15 @@ Masukkan alasan override Super Admin:`
                               inventoryBatches.filter(b=>
                                 b.skuId===formData.outSkuId &&
                                 Number(b.currentQty||0)>0 &&
-                                (!outboundIsFinishedGoods || b.resultTmNumber===formData.outTmNumber)
+                                (!outboundIsFinishedGoods || b.resultTmNumber===formData.outTmNumber) &&
+                                (outboundIsFinishedGoods ? isFinishedBatchQcReleased(b) : isRawBatchQcUsable(b))
                               )
                             ).map(b=>{
                               const candidateBatches=inventoryBatches.filter(x=>
                                 x.skuId===formData.outSkuId &&
                                 Number(x.currentQty||0)>0 &&
-                                (!outboundIsFinishedGoods || x.resultTmNumber===formData.outTmNumber)
+                                (!outboundIsFinishedGoods || x.resultTmNumber===formData.outTmNumber) &&
+                                (outboundIsFinishedGoods ? isFinishedBatchQcReleased(x) : isRawBatchQcUsable(x))
                               );
                               const expiryInfo=getBatchExpiryInfo(b);
                               const recommendation=getBatchRecommendationLabel(b,candidateBatches);
@@ -6593,6 +6670,7 @@ Masukkan alasan override Super Admin:`
                       <select className="w-full border border-slate-300 p-2.5 rounded-lg outline-none focus:border-blue-500 bg-white" value={newUserForm.role} onChange={e=>setNewUserForm({...newUserForm, role: e.target.value})}>
                         <option value="Super Admin">Super Admin</option>
                         <option value="Admin">Admin</option>
+                        <option value="QC">QC</option>
                         <option value="Operator">Operator</option>
                         <option value="Viewer">View Only (Tamu)</option>
                       </select>
