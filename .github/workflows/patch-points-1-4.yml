@@ -1,10 +1,10 @@
-name: One-time Point 1 UI Patch
+name: One-time Point 3 Outbound FEFO UI
 
 on:
   push:
     paths:
       - ".github/workflows/patch-points-1-4.yml"
-      - ".github/scripts/patch_point_1_ui.py"
+      - ".github/scripts/patch_point_3_outbound_ui.py"
 
 permissions:
   contents: write
@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Apply multibatch UI patch
-        run: python .github/scripts/patch_point_1_ui.py
+      - name: Apply outbound FEFO UI
+        run: python .github/scripts/patch_point_3_outbound_ui.py
       - name: Commit App changes
         run: |
           git config user.name "github-actions[bot]"
@@ -27,5 +27,5 @@ jobs:
             echo "No changes."
             exit 0
           fi
-          git commit -m "Add multibatch rebag source UI"
+          git commit -m "Add FEFO FIFO outbound indicators and expiry blocks"
           git push
