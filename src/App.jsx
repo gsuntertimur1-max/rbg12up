@@ -267,8 +267,12 @@ async function generateRebaggingBatchPdf(tx) {
   txt("Pelaksana", 359, 242.5, { bold: true, align: "center" });
   txt("Pengawas", 474, 242.5, { bold: true, align: "center" });
 
-  const sourceQty = Number(tx.sourceQty ?? tx.qtyChange ?? 0);
-  const finishedQty = Number(tx.finishedQty ?? tx.qtyChange ?? 0);
+  const sourceQty = Number(tx.sourceQty ?? tx.processedQty ?? tx.qtyChange ?? 0);
+  const finishedQty = Number(tx.finishedQty ?? tx.goodQty ?? tx.qtyChange ?? 0);
+  const goodQty = Number(tx.goodQty ?? finishedQty ?? 0);
+  const processQty = Number(tx.processQty ?? 0);
+  const damageQty = Number(tx.damageQty ?? 0);
+  const reconciledQty = goodQty + processQty + damageQty;
   const sourceUnit = tx.sourceUnit || "KG";
   const finishedUnit = tx.finishedUnit || tx.unit || "Pack";
   const executor = tx.executor || "KOPEL JAYA";
@@ -337,9 +341,15 @@ async function generateRebaggingBatchPdf(tx) {
   txt("Paraf", 451, 540.5);
   txt(sourceQty ? sourceQty + " " + sourceUnit : "", 20, 553, { bold: true });
   txt(finishedQty ? finishedQty + " " + finishedUnit : "", 169, 553, { bold: true });
-  if (Number.isFinite(sourceQty) && Number.isFinite(finishedQty)) {
-    txt(String(finishedQty - sourceQty), 342, 553, { bold: true });
+  if (Number.isFinite(sourceQty) && Number.isFinite(reconciledQty)) {
+    txt(String(reconciledQty - sourceQty), 342, 553, { bold: true });
   }
+  txt(
+    "GOOD: " + goodQty + " | PROCESS: " + processQty + " | DAMAGE: " + damageQty,
+    169,
+    559,
+    { size: 5.2, bold: true }
+  );
 
   section("7. PENYIMPANAN PRODUK JADI", 561);
   line(L, 570, R, 570);
@@ -540,12 +550,19 @@ async function generateFinishedGoodsStockCardPdf({ sku, batches, transactions })
   const W = R - L;
 
   const inbound = transactions
-    .filter((t) => t.type === "REBAGGING" && t.skuId === sku.id)
+    .filter(
+      (t) =>
+        (t.type === "REBAGGING" || t.type === "PROCESS_TO_GOOD") &&
+        t.skuId === sku.id
+    )
     .map((t) => ({
       kind: "IN",
       date: t.productionDate || t.date,
       batchId: t.batchId || "",
-      qty: Number(t.finishedQty ?? t.qtyChange) || 0,
+      qty:
+        t.type === "PROCESS_TO_GOOD"
+          ? Number(t.resolutionQty ?? t.qtyChange) || 0
+          : Number(t.finishedQty ?? t.goodQty ?? t.qtyChange) || 0,
       stack: t.targetStack || "",
     }));
 
@@ -734,11 +751,17 @@ export default function App() {
   const initialFormData = {
     inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inSourceWarehouse: "",
     rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
+    rebagGoodQty: "", rebagProcessQty: "0", rebagDamageQty: "0",
     rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(), outSkuId: "", outSoNumber: "", outCustomer: "",
     useBackdate: false, backdateDateTime: ""
   };
   const [formData, setFormData] = useState(initialFormData);
   const [outboundSelections, setOutboundSelections] = useState({});
+  const [processResolution, setProcessResolution] = useState({
+    batchId: "",
+    qty: "",
+    outcome: "GOOD",
+  });
 
   const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG" });
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
@@ -978,10 +1001,24 @@ export default function App() {
         const targetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
         const sourceSku = skus.find((s) => s.id === selectedBatch?.skuId);
         const qty = Number(formData.qtyToProcess);
+        const goodQty = Number(formData.rebagGoodQty || 0);
+        const processQty = Number(formData.rebagProcessQty || 0);
+        const damageQty = Number(formData.rebagDamageQty || 0);
+        const totalResultQty = goodQty + processQty + damageQty;
 
         if (!selectedBatch) return alert("Pilih batch bahan baku yang valid.");
         if (!targetSku) return alert("Pilih SKU hasil rebagging.");
         if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas proses harus lebih dari 0.");
+        if (
+          ![goodQty, processQty, damageQty].every((value) => Number.isFinite(value) && value >= 0)
+        ) {
+          return alert("Jumlah GOOD, PROCESS, dan DAMAGE harus berupa angka 0 atau lebih.");
+        }
+        if (Math.abs(totalResultQty - qty) > 0.0001) {
+          return alert(
+            `Total hasil tidak sesuai. GOOD + PROCESS + DAMAGE harus sama dengan Qty Diproses (${qty}). Saat ini total hasil: ${totalResultQty}.`
+          );
+        }
         if (!formData.rebagMoNumber?.trim()) return alert("No. MO wajib diisi untuk dokumen rebagging.");
         if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
         if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
@@ -1022,7 +1059,11 @@ export default function App() {
               batchId: newBatchId,
               skuId: targetSku.id,
               initialQty: qty,
-              currentQty: qty,
+              currentQty: goodQty,
+              goodQty,
+              processQty,
+              damageQty,
+              totalProducedQty: qty,
               sourceWarehouse: liveBatch.sourceWarehouse || selectedBatch.sourceWarehouse || "",
               targetStack: formData.rebagTargetStack,
               sourceBatchId: selectedBatch.batchId,
@@ -1044,7 +1085,11 @@ export default function App() {
               type: "REBAGGING",
               skuId: targetSku.id,
               skuName: targetSku.name,
-              qtyChange: qty,
+              qtyChange: goodQty,
+              processedQty: qty,
+              goodQty,
+              processQty,
+              damageQty,
               unit: targetSku.unit,
               operator: currentUser.username,
               supervisor: currentUser.username,
@@ -1059,7 +1104,7 @@ export default function App() {
               sourceSkuName: sourceSku?.name || "Gula Curah",
               sourceQty: qty,
               sourceUnit: sourceSku?.unit || "KG",
-              finishedQty: qty,
+              finishedQty: goodQty,
               finishedUnit: targetSku.unit,
               batchId: newBatchId,
               ...auditMeta,
@@ -1148,6 +1193,87 @@ export default function App() {
     } catch (error) {
       console.error("Transaction Error:", error);
       alert(`Transaksi gagal disimpan: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
+    }
+  };
+
+  const handleProcessResolutionSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!hasAccess(["Super Admin", "Admin", "Operator"])) {
+      return alert("Anda tidak memiliki akses untuk menindaklanjuti barang PROCESS.");
+    }
+    if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
+
+    const batch = inventoryBatches.find((b) => b.batchId === processResolution.batchId);
+    const qty = Number(processResolution.qty);
+    const outcome = processResolution.outcome;
+
+    if (!batch) return alert("Pilih batch PROCESS yang valid.");
+    if (!Number.isFinite(qty) || qty <= 0) return alert("Jumlah tindak lanjut harus lebih dari 0.");
+    if (!["GOOD", "DAMAGE"].includes(outcome)) return alert("Pilih hasil tindak lanjut yang valid.");
+
+    const sku = skus.find((s) => s.id === batch.skuId);
+    const timestamp = Date.now();
+    const date = new Date(timestamp).toISOString();
+    const batchRef = doc(db, "artifacts", appId, "public", "data", "batches", batch.batchId);
+    const txId = `TRX-PRC-${timestamp}`;
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const batchSnap = await transaction.get(batchRef);
+        if (!batchSnap.exists()) throw new Error("Batch produk jadi tidak ditemukan.");
+
+        const liveBatch = batchSnap.data();
+        const liveProcessQty = Number(liveBatch.processQty || 0);
+        const liveCurrentQty = Number(liveBatch.currentQty || 0);
+        const liveGoodQty = Number(liveBatch.goodQty ?? liveCurrentQty);
+        const liveDamageQty = Number(liveBatch.damageQty || 0);
+
+        if (qty > liveProcessQty) {
+          throw new Error(`Jumlah melebihi stok PROCESS terbaru (${liveProcessQty}).`);
+        }
+
+        const updates = {
+          processQty: liveProcessQty - qty,
+        };
+
+        if (outcome === "GOOD") {
+          updates.currentQty = liveCurrentQty + qty;
+          updates.goodQty = liveGoodQty + qty;
+        } else {
+          updates.damageQty = liveDamageQty + qty;
+        }
+
+        transaction.update(batchRef, updates);
+        transaction.set(
+          doc(db, "artifacts", appId, "public", "data", "transactions", txId),
+          {
+            id: txId,
+            date,
+            recordedAt: date,
+            isBackdated: false,
+            backdatedBy: "",
+            type: outcome === "GOOD" ? "PROCESS_TO_GOOD" : "PROCESS_TO_DAMAGE",
+            skuId: liveBatch.skuId,
+            skuName: sku?.name || liveBatch.skuId || "",
+            qtyChange: outcome === "GOOD" ? qty : 0,
+            resolutionQty: qty,
+            fromStatus: "PROCESS",
+            toStatus: outcome,
+            unit: sku?.unit || "",
+            operator: currentUser.username,
+            batchId: liveBatch.batchId,
+            targetStack: liveBatch.targetStack || "",
+            productionDate: liveBatch.productionDate || liveBatch.date || date,
+          }
+        );
+      });
+
+      showNotif(`PROCESS berhasil dipindahkan menjadi ${outcome}`);
+      setProcessResolution({ batchId: "", qty: "", outcome: "GOOD" });
+    } catch (error) {
+      console.error("Process Resolution Error:", error);
+      alert(`Gagal menindaklanjuti PROCESS: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
     }
   };
 
@@ -1646,21 +1772,53 @@ export default function App() {
                 </div>
               </div>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
-                <table className="w-full text-sm text-left min-w-[780px]">
+                <table className="w-full text-sm text-left min-w-[920px]">
                   <thead className="bg-slate-50 text-slate-600">
-                    <tr><th className="p-4 font-semibold whitespace-nowrap">ID SKU</th><th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th><th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th><th className="p-4 font-semibold text-right whitespace-nowrap">Total Stok Aktif</th><th className="p-4 font-semibold text-center whitespace-nowrap">Dokumen</th></tr>
+                    <tr>
+                      <th className="p-4 font-semibold whitespace-nowrap">ID SKU</th>
+                      <th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th>
+                      <th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th>
+                      {activeInvTab === 'rebagged' ? (
+                        <>
+                          <th className="p-4 font-semibold text-right whitespace-nowrap text-green-700">GOOD</th>
+                          <th className="p-4 font-semibold text-right whitespace-nowrap text-amber-700">PROCESS</th>
+                          <th className="p-4 font-semibold text-right whitespace-nowrap text-red-700">DAMAGE</th>
+                          <th className="p-4 font-semibold text-right whitespace-nowrap">Total</th>
+                        </>
+                      ) : (
+                        <th className="p-4 font-semibold text-right whitespace-nowrap">Total Stok Aktif</th>
+                      )}
+                      <th className="p-4 font-semibold text-center whitespace-nowrap">Dokumen</th>
+                    </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {skus.filter(s=>s.type===activeInvTab).map(sku => {
-                      const batches = inventoryBatches.filter(b=>b.skuId===sku.id && b.currentQty>0);
-                      const total = batches.reduce((acc, b) => acc+b.currentQty, 0);
-                      const sources = [...new Set(batches.map(b=>b.sourceWarehouse))].join(", ") || "-";
+                      const allSkuBatches = inventoryBatches.filter(b=>b.skuId===sku.id);
+                      const batches = allSkuBatches.filter(b =>
+                        activeInvTab === 'rebagged'
+                          ? (Number(b.currentQty || 0) > 0 || Number(b.processQty || 0) > 0 || Number(b.damageQty || 0) > 0)
+                          : Number(b.currentQty || 0) > 0
+                      );
+                      const good = batches.reduce((acc, b) => acc + Number(b.currentQty || 0), 0);
+                      const process = batches.reduce((acc, b) => acc + Number(b.processQty || 0), 0);
+                      const damage = batches.reduce((acc, b) => acc + Number(b.damageQty || 0), 0);
+                      const total = activeInvTab === 'rebagged' ? good + process + damage : good;
+                      const sources = [...new Set(batches.map(b=>b.sourceWarehouse).filter(Boolean))].join(", ") || "-";
                       return (
                         <tr key={sku.id} className="hover:bg-slate-50 transition-colors">
                           <td className="p-4 text-slate-500 font-mono">{sku.id}</td>
                           <td className="p-4 font-semibold text-slate-800">{sku.name}</td>
                           <td className="p-4 text-slate-600">{sources}</td>
-                          <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
+                          {activeInvTab === 'rebagged' ? (
+                            <>
+                              <td className="p-4 text-right font-black text-green-700 text-base">{good} <span className="font-medium text-slate-400 text-xs">{sku.unit}</span></td>
+                              <td className="p-4 text-right font-black text-amber-700 text-base">{process} <span className="font-medium text-slate-400 text-xs">{sku.unit}</span></td>
+                              <td className="p-4 text-right font-black text-red-700 text-base">{damage} <span className="font-medium text-slate-400 text-xs">{sku.unit}</span></td>
+                              <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
+                            </>
+                          ) : (
+                            <td className="p-4 text-right font-black text-slate-800 text-base">{total} <span className="font-medium text-slate-500 text-sm">{sku.unit}</span></td>
+                          )}
                           <td className="p-4 text-center">
                             <button
                               type="button"
@@ -1763,7 +1921,38 @@ export default function App() {
                       <>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Asal (Sumber)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Bahan Baku..." /></div>
                         {formData.bulkSkuId && <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch (Berdasarkan Gudang Asal)</label><SearchableSelect options={inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && b.currentQty>0).map(b=>({value:b.batchId, label:`${b.sourceWarehouse} (Sisa Stok: ${b.currentQty})`}))} value={formData.bulkBatchId} onChange={v=>setFormData({...formData, bulkBatchId:v})} placeholder="Pilih Batch yang akan direbagging..." /></div>}
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas yang Diproses</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas yang Diproses</label><input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                          <div className="flex items-start justify-between gap-3 mb-4">
+                            <div>
+                              <h4 className="font-black text-slate-800">Hasil Pemeriksaan Rebagging</h4>
+                              <p className="text-xs text-slate-500 mt-1">GOOD dapat langsung menjadi stok siap outbound. PROCESS harus ditindaklanjuti. DAMAGE tidak masuk stok normal.</p>
+                            </div>
+                            <CheckCircle size={20} className="text-green-600 shrink-0"/>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-xs font-black text-green-700 mb-2">GOOD</label>
+                              <input type="number" min="0" className="w-full p-3 border border-green-200 bg-white rounded-lg outline-none focus:border-green-500 font-bold text-green-700" value={formData.rebagGoodQty} onChange={e=>setFormData({...formData, rebagGoodQty:e.target.value})} placeholder="0" required />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-black text-amber-700 mb-2">PROCESS / REWORK</label>
+                              <input type="number" min="0" className="w-full p-3 border border-amber-200 bg-white rounded-lg outline-none focus:border-amber-500 font-bold text-amber-700" value={formData.rebagProcessQty} onChange={e=>setFormData({...formData, rebagProcessQty:e.target.value})} placeholder="0" required />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-black text-red-700 mb-2">DAMAGE</label>
+                              <input type="number" min="0" className="w-full p-3 border border-red-200 bg-white rounded-lg outline-none focus:border-red-500 font-bold text-red-700" value={formData.rebagDamageQty} onChange={e=>setFormData({...formData, rebagDamageQty:e.target.value})} placeholder="0" required />
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white border border-slate-200 px-4 py-3 text-xs">
+                            <span className="font-bold text-slate-500">Total hasil</span>
+                            <span className={`font-black ${Math.abs((Number(formData.rebagGoodQty || 0) + Number(formData.rebagProcessQty || 0) + Number(formData.rebagDamageQty || 0)) - Number(formData.qtyToProcess || 0)) < 0.0001 && Number(formData.qtyToProcess || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {Number(formData.rebagGoodQty || 0) + Number(formData.rebagProcessQty || 0) + Number(formData.rebagDamageQty || 0)} / {Number(formData.qtyToProcess || 0)}
+                            </span>
+                          </div>
+                        </div>
+
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
                             <label className="block text-sm font-bold text-slate-700 mb-2">No. MO</label>
@@ -1814,6 +2003,83 @@ export default function App() {
                     )}
                     <button className="w-full bg-red-600 text-white font-bold py-3.5 mt-6 rounded-lg hover:bg-red-700 transition-colors shadow-lg flex justify-center items-center gap-2"><CheckCircle size={20}/> Konfirmasi & Simpan Transaksi</button>
                   </form>
+
+                  {activeOpTab === 'rebagging' && (
+                    <div className="mt-10 max-w-3xl border-t border-slate-200 pt-8">
+                      <div className="flex items-start gap-3 mb-5">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 shrink-0">
+                          <Settings2 size={20}/>
+                        </div>
+                        <div>
+                          <h3 className="font-black text-lg text-slate-800">Tindak Lanjut Barang PROCESS</h3>
+                          <p className="text-sm text-slate-500 mt-1">Setelah rework dan pemeriksaan ulang, pindahkan PROCESS menjadi GOOD. Jika tidak layak, pindahkan menjadi DAMAGE.</p>
+                        </div>
+                      </div>
+
+                      <form onSubmit={handleProcessResolutionSubmit} className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4 sm:p-5 space-y-4">
+                        {inventoryBatches.filter(b => Number(b.processQty || 0) > 0).length > 0 ? (
+                          <>
+                            <div>
+                              <label className="block text-sm font-bold text-slate-700 mb-2">Batch dengan stok PROCESS</label>
+                              <select
+                                className="w-full p-3 border border-amber-200 rounded-lg bg-white outline-none focus:border-amber-500"
+                                value={processResolution.batchId}
+                                onChange={e=>setProcessResolution({...processResolution, batchId:e.target.value, qty:""})}
+                                required
+                              >
+                                <option value="">-- Pilih Batch PROCESS --</option>
+                                {inventoryBatches
+                                  .filter(b => Number(b.processQty || 0) > 0)
+                                  .map(b => {
+                                    const sku = skus.find(s => s.id === b.skuId);
+                                    return (
+                                      <option key={b.batchId} value={b.batchId}>
+                                        {b.batchId} - {sku?.name || b.skuId} (PROCESS: {b.processQty})
+                                      </option>
+                                    );
+                                  })}
+                              </select>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Jumlah Diproses Ulang</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={inventoryBatches.find(b=>b.batchId===processResolution.batchId)?.processQty || undefined}
+                                  className="w-full p-3 border border-amber-200 rounded-lg bg-white outline-none focus:border-amber-500"
+                                  value={processResolution.qty}
+                                  onChange={e=>setProcessResolution({...processResolution, qty:e.target.value})}
+                                  placeholder="0"
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Hasil Pemeriksaan Ulang</label>
+                                <select
+                                  className="w-full p-3 border border-amber-200 rounded-lg bg-white outline-none focus:border-amber-500 font-bold"
+                                  value={processResolution.outcome}
+                                  onChange={e=>setProcessResolution({...processResolution, outcome:e.target.value})}
+                                >
+                                  <option value="GOOD">GOOD — Lolos, masuk stok siap outbound</option>
+                                  <option value="DAMAGE">DAMAGE — Tidak layak, pisahkan dari stok normal</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            <button type="submit" className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black px-5 py-3 shadow-md">
+                              <CheckCircle size={18}/> Simpan Tindak Lanjut PROCESS
+                            </button>
+                          </>
+                        ) : (
+                          <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-700">
+                            Tidak ada stok PROCESS yang menunggu tindak lanjut.
+                          </div>
+                        )}
+                      </form>
+                    </div>
+                  )}
                </div>
             </div>
           )}
@@ -1863,8 +2129,29 @@ export default function App() {
                           </span>
                         </td>
                         <td className="p-4 font-bold text-slate-800 min-w-[200px]">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
-                        <td className={`p-4 text-center font-black text-lg whitespace-nowrap ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
-                          {t.type === 'OUTBOUND' ? '-' : '+'}{t.qtyChange}
+                        <td className="p-4 text-center font-black whitespace-nowrap">
+                          {t.type === 'PROCESS_TO_DAMAGE' ? (
+                            <div>
+                              <div className="text-red-600">PROCESS → DAMAGE</div>
+                              <div className="text-xs text-slate-500 mt-1">{t.resolutionQty} {t.unit}</div>
+                            </div>
+                          ) : t.type === 'PROCESS_TO_GOOD' ? (
+                            <div>
+                              <div className="text-green-600">PROCESS → GOOD</div>
+                              <div className="text-xs text-slate-500 mt-1">+{t.resolutionQty} {t.unit}</div>
+                            </div>
+                          ) : t.type === 'REBAGGING' ? (
+                            <div>
+                              <div className="text-green-600 text-lg">+{t.goodQty ?? t.qtyChange}</div>
+                              <div className="text-[10px] text-slate-500 mt-1">
+                                G:{t.goodQty ?? t.qtyChange} · P:{t.processQty ?? 0} · D:{t.damageQty ?? 0}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className={`text-lg ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
+                              {t.type === 'OUTBOUND' ? '-' : '+'}{t.qtyChange}
+                            </span>
+                          )}
                         </td>
                         <td className="p-4 text-slate-600 capitalize font-medium whitespace-nowrap">{t.operator}</td>
                         <td className="p-4 text-center whitespace-nowrap">
