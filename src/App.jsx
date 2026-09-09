@@ -17,7 +17,7 @@ import { jsPDF } from "jspdf";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, writeBatch, runTransaction } from "firebase/firestore";
+import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, writeBatch, runTransaction, getDocs } from "firebase/firestore";
 
 // --- DEFAULT DATA ---
 const STACK_LOCATIONS = ["Unit Pengolahan 20", "RTR 60", "Gula 17"];
@@ -727,6 +727,7 @@ export default function App() {
   const [activeOpTab, setActiveOpTab] = useState("inbound");
   const [historyStartDate, setHistoryStartDate] = useState("");
   const [historyEndDate, setHistoryEndDate] = useState("");
+  const [resetHistoryLoading, setResetHistoryLoading] = useState(false);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -1286,6 +1287,60 @@ export default function App() {
     e.preventDefault();
     if (db) await setDoc(doc(db, "artifacts", appId, "public", "data", "config", "system"), systemConfig);
     showNotif("Konfigurasi Sistem Diperbarui");
+  };
+
+  const handleResetTransactionHistory = async () => {
+    if (!isVerifiedSuperAdmin) {
+      return alert("Akses reset riwayat hanya tersedia untuk Super Admin yang terverifikasi.");
+    }
+    if (!db) {
+      return alert("Database belum siap. Silakan muat ulang aplikasi.");
+    }
+
+    const firstConfirm = window.confirm(
+      "PERINGATAN: Semua RIWAYAT TRANSAKSI akan dihapus permanen.\n\nStok, batch inventori, master SKU, pengguna, dan konfigurasi TIDAK akan dihapus.\n\nLanjutkan?"
+    );
+    if (!firstConfirm) return;
+
+    const verification = window.prompt(
+      'Ketik tepat "RESET RIWAYAT" untuk mengonfirmasi penghapusan seluruh riwayat transaksi.'
+    );
+    if (verification !== "RESET RIWAYAT") {
+      return alert("Konfirmasi tidak sesuai. Reset dibatalkan.");
+    }
+
+    try {
+      setResetHistoryLoading(true);
+
+      const txCollection = collection(db, "artifacts", appId, "public", "data", "transactions");
+      const snapshot = await getDocs(txCollection);
+
+      if (snapshot.empty) {
+        alert("Riwayat transaksi sudah kosong.");
+        return;
+      }
+
+      const docsToDelete = snapshot.docs;
+      const chunkSize = 450;
+
+      for (let i = 0; i < docsToDelete.length; i += chunkSize) {
+        const batch = writeBatch(db);
+        docsToDelete.slice(i, i + chunkSize).forEach((txDoc) => {
+          batch.delete(txDoc.ref);
+        });
+        await batch.commit();
+      }
+
+      showNotif(`${docsToDelete.length} riwayat transaksi berhasil dihapus`);
+      alert(
+        `${docsToDelete.length} riwayat transaksi telah dihapus.\n\nStok dan batch inventori tetap dipertahankan.`
+      );
+    } catch (error) {
+      console.error("Reset Transaction History Error:", error);
+      alert(`Gagal mereset riwayat transaksi: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
+    } finally {
+      setResetHistoryLoading(false);
+    }
   };
 
   if (dbError) return (
@@ -1860,6 +1915,14 @@ export default function App() {
                   >
                     <Users size={17}/> Pengguna
                   </button>
+                  {isVerifiedSuperAdmin && (
+                    <button
+                      onClick={()=>setActiveTabSettings('reset-data')}
+                      className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='reset-data'?'bg-red-600 text-white shadow-lg shadow-red-100':'text-red-600 hover:bg-red-50'}`}
+                    >
+                      <Trash2 size={17}/> Reset Data
+                    </button>
+                  )}
                 </div>
               </div>
               
@@ -1911,6 +1974,60 @@ export default function App() {
                       Pilih File Excel Anda
                       <input type="file" accept=".xlsx, .xls" onChange={handleImportExcel} className="hidden" />
                     </label>
+                  </div>
+                </div>
+              )}
+
+              {activeTabSettings === 'reset-data' && isVerifiedSuperAdmin && (
+                <div className="max-w-2xl">
+                  <div className="overflow-hidden rounded-2xl border border-red-200 bg-white shadow-sm">
+                    <div className="border-b border-red-100 bg-gradient-to-r from-red-50 to-white p-5 sm:p-6">
+                      <div className="flex items-start gap-4">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600">
+                          <Trash2 size={22}/>
+                        </div>
+                        <div>
+                          <div className="text-xs font-black uppercase tracking-[0.16em] text-red-500">Zona Berbahaya</div>
+                          <h3 className="mt-1 text-xl font-black text-slate-900">Reset Riwayat Transaksi</h3>
+                          <p className="mt-2 text-sm leading-6 text-slate-600">
+                            Fitur ini hanya menghapus data pada riwayat transaksi Inbound, Rebagging, dan Outbound.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-5 sm:p-6 space-y-5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Akan Dihapus</p>
+                          <p className="mt-2 text-lg font-black text-red-600">{transactions.length} transaksi</p>
+                          <p className="mt-1 text-xs text-slate-500">Seluruh riwayat transaksi yang tersimpan.</p>
+                        </div>
+                        <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+                          <p className="text-xs font-bold uppercase tracking-wider text-green-600">Tetap Dipertahankan</p>
+                          <p className="mt-2 text-sm font-black text-green-800">Stok & Batch Inventori</p>
+                          <p className="mt-1 text-xs text-green-700">Master SKU, pengguna, dan konfigurasi juga tidak dihapus.</p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
+                        <strong>Perhatian:</strong> setelah riwayat dihapus, kartu persediaan masih dapat dibuat dari stok aktif, tetapi detail pergerakan transaksi lama tidak lagi tersedia.
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleResetTransactionHistory}
+                        disabled={resetHistoryLoading || transactions.length === 0}
+                        className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-red-100 transition-all hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                      >
+                        <Trash2 size={18}/>
+                        {resetHistoryLoading ? "Menghapus Riwayat..." : transactions.length === 0 ? "Riwayat Sudah Kosong" : "Reset Seluruh Riwayat Transaksi"}
+                      </button>
+
+                      <p className="text-xs leading-5 text-slate-400">
+                        Sistem akan meminta konfirmasi dua tahap sebelum proses penghapusan dijalankan.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
