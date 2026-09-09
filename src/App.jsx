@@ -808,14 +808,16 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const initialFormData = {
-    inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inResultTmNumber: "", inSourceWarehouse: "",
     rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
     rebagGoodQty: "", rebagProcessQty: "0", rebagDamageQty: "0",
-    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(),
-    outSkuId: "", outMoNumber: "", outTmNumber: "", outSoNumber: "", outCustomer: "",
+    rebagResultTmNumber: "", rebagExpiryDate: getDefaultExpiryDate(),
+    outSkuId: "", outTmNumber: "", outSoNumber: "", outCustomer: "",
     useBackdate: false, backdateDateTime: ""
   };
   const [formData, setFormData] = useState(initialFormData);
+  const [inboundLines, setInboundLines] = useState([
+    { rowId: "IN-1", skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }
+  ]);
   const [outboundSelections, setOutboundSelections] = useState({});
   const [rebagMaterialSelections, setRebagMaterialSelections] = useState({});
   const [processResolution, setProcessResolution] = useState({
@@ -940,57 +942,11 @@ export default function App() {
   const selectedRebagTargetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
   const activeRebagRecipe = getRebagRecipe(selectedRebagTargetSku);
 
-  const getResultTmForMo = (moNumber) => {
-    if (!moNumber) return "";
-    const values = inventoryBatches
-      .filter((b) => b.moNumber === moNumber && b.resultTmNumber)
-      .map((b) => String(b.resultTmNumber).trim())
-      .filter(Boolean);
-    return [...new Set(values)][0] || "";
-  };
-
-  const rebagAvailableMos = useMemo(() => {
-    if (activeRebagRecipe) {
-      const moSets = activeRebagRecipe.materials.map((skuId) =>
-        new Set(
-          inventoryBatches
-            .filter(
-              (b) =>
-                b.skuId === skuId &&
-                Number(b.currentQty || 0) > 0 &&
-                b.moNumber
-            )
-            .map((b) => b.moNumber)
-        )
-      );
-      if (moSets.length === 0) return [];
-      return [...moSets[0]]
-        .filter((mo) => moSets.every((set) => set.has(mo)))
-        .sort();
-    }
-
-    if (formData.bulkSkuId) {
-      return [
-        ...new Set(
-          inventoryBatches
-            .filter(
-              (b) =>
-                b.skuId === formData.bulkSkuId &&
-                Number(b.currentQty || 0) > 0 &&
-                b.moNumber
-            )
-            .map((b) => b.moNumber)
-        ),
-      ].sort();
-    }
-
-    return [];
-  }, [activeRebagRecipe, formData.bulkSkuId, inventoryBatches]);
-
   const outboundSelectedSku = skus.find((s) => s.id === formData.outSkuId);
   const outboundIsFinishedGoods = outboundSelectedSku?.type === "rebagged";
-  const outboundAvailableMos = useMemo(() => {
-    if (!formData.outSkuId) return [];
+
+  const outboundAvailableResultTms = useMemo(() => {
+    if (!formData.outSkuId || !outboundIsFinishedGoods) return [];
     return [
       ...new Set(
         inventoryBatches
@@ -998,62 +954,81 @@ export default function App() {
             (b) =>
               b.skuId === formData.outSkuId &&
               Number(b.currentQty || 0) > 0 &&
-              b.moNumber
+              b.resultTmNumber
           )
-          .map((b) => b.moNumber)
+          .map((b) => b.resultTmNumber)
       ),
     ].sort();
-  }, [formData.outSkuId, inventoryBatches]);
+  }, [formData.outSkuId, outboundIsFinishedGoods, inventoryBatches]);
 
-  const handleInboundMoChange = (value) => {
-    const knownTmResult = getResultTmForMo(value);
-    setFormData((prev) => ({
+  const addInboundLine = () => {
+    setInboundLines((prev) => [
       ...prev,
-      inMoNumber: value,
-      inResultTmNumber: knownTmResult || prev.inResultTmNumber,
-    }));
+      {
+        rowId: `IN-${Date.now()}-${prev.length + 1}`,
+        skuId: "",
+        qty: "",
+        moNumber: "",
+        tmNumber: "",
+        sourceWarehouse: "",
+      },
+    ]);
+  };
+
+  const updateInboundLine = (rowId, field, value) => {
+    setInboundLines((prev) =>
+      prev.map((line) => (line.rowId === rowId ? { ...line, [field]: value } : line))
+    );
+  };
+
+  const removeInboundLine = (rowId) => {
+    setInboundLines((prev) => {
+      const next = prev.filter((line) => line.rowId !== rowId);
+      return next.length > 0
+        ? next
+        : [{ rowId: `IN-${Date.now()}`, skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }];
+    });
   };
 
   const handleRebagTargetChange = (value) => {
     setFormData((prev) => ({
       ...prev,
       rebagTargetSkuId: value,
-      rebagMoNumber: "",
       bulkSkuId: "",
       bulkBatchId: "",
+      rebagResultTmNumber: "",
     }));
-    setRebagMaterialSelections({});
-  };
-
-  const handleRebagMoChange = (value) => {
-    setFormData((prev) => ({ ...prev, rebagMoNumber: value, bulkBatchId: "" }));
     setRebagMaterialSelections({});
   };
 
   const handleOutboundSkuChange = (value) => {
+    const sku = skus.find((s) => s.id === value);
+    const resultTms =
+      sku?.type === "rebagged"
+        ? [
+            ...new Set(
+              inventoryBatches
+                .filter(
+                  (b) =>
+                    b.skuId === value &&
+                    Number(b.currentQty || 0) > 0 &&
+                    b.resultTmNumber
+                )
+                .map((b) => b.resultTmNumber)
+            ),
+          ].sort()
+        : [];
+
     setFormData((prev) => ({
       ...prev,
       outSkuId: value,
-      outMoNumber: "",
-      outTmNumber: "",
+      outTmNumber: resultTms.length === 1 ? resultTms[0] : "",
     }));
     setOutboundSelections({});
   };
 
-  const handleOutboundMoChange = (value) => {
-    const batchTm =
-      inventoryBatches.find(
-        (b) =>
-          b.skuId === formData.outSkuId &&
-          b.moNumber === value &&
-          b.resultTmNumber
-      )?.resultTmNumber || getResultTmForMo(value);
-
-    setFormData((prev) => ({
-      ...prev,
-      outMoNumber: value,
-      outTmNumber: batchTm || "",
-    }));
+  const handleOutboundTmChange = (value) => {
+    setFormData((prev) => ({ ...prev, outTmNumber: value }));
     setOutboundSelections({});
   };
 
@@ -1131,65 +1106,77 @@ export default function App() {
 
     try {
       if (activeOpTab === "inbound") {
-        const sku = skus.find((s) => s.id === formData.inSkuId);
-        const qty = Number(formData.inQty);
+        const normalizedLines = inboundLines.map((line) => ({
+          ...line,
+          sku: skus.find((s) => s.id === line.skuId),
+          qtyValue: Number(line.qty),
+          moNumber: String(line.moNumber || "").trim(),
+          tmNumber: String(line.tmNumber || "").trim(),
+          sourceWarehouse: String(line.sourceWarehouse || "").trim(),
+        }));
 
-        if (!sku) return alert("Pilih SKU barang masuk terlebih dahulu.");
-        if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas barang masuk harus lebih dari 0.");
-        if (!formData.inSourceWarehouse?.trim()) return alert("Gudang asal wajib diisi.");
-
-        const inboundMo = formData.inMoNumber?.trim() || "";
-        const inboundTm = formData.inTmNumber?.trim() || "";
-        const inboundResultTm = formData.inResultTmNumber?.trim() || "";
-        const existingResultTm = inboundMo ? getResultTmForMo(inboundMo) : "";
-
-        if (existingResultTm && inboundResultTm && existingResultTm !== inboundResultTm) {
-          return alert(
-            `TM Hasil untuk MO ${inboundMo} sebelumnya sudah tercatat sebagai ${existingResultTm}. Gunakan TM Hasil yang sama.`
-          );
+        if (normalizedLines.length === 0) {
+          return alert("Tambahkan minimal satu SKU bahan.");
         }
 
-        const batchId = `INB-${timestamp}`;
-        const txId = `TRX-${timestamp}`;
-        const batchData = {
-          batchId,
-          skuId: sku.id,
-          initialQty: qty,
-          currentQty: qty,
-          sourceWarehouse: formData.inSourceWarehouse.trim(),
-          moNumber: inboundMo,
-          tmNumber: inboundTm,
-          resultTmNumber: inboundResultTm || existingResultTm,
-          date,
-          ...auditMeta,
-        };
-        const txData = {
-          id: txId,
-          date,
-          type: "INBOUND",
-          skuId: sku.id,
-          skuName: sku.name,
-          qtyChange: qty,
-          unit: sku.unit,
-          operator: currentUser.username,
-          sourceWarehouse: formData.inSourceWarehouse.trim(),
-          moNumber: inboundMo,
-          tmNumber: inboundTm,
-          resultTmNumber: inboundResultTm || existingResultTm,
-          batchId,
-          ...auditMeta,
-        };
+        for (let i = 0; i < normalizedLines.length; i += 1) {
+          const line = normalizedLines[i];
+          const rowLabel = `Baris ${i + 1}`;
 
-        await runTransaction(db, async (transaction) => {
-          transaction.set(
+          if (!line.sku) return alert(`${rowLabel}: pilih SKU bahan.`);
+          if (!Number.isFinite(line.qtyValue) || line.qtyValue <= 0) {
+            return alert(`${rowLabel}: kuantitas harus lebih dari 0.`);
+          }
+          if (!line.moNumber) return alert(`${rowLabel}: No. MO wajib diisi.`);
+          if (!line.tmNumber) return alert(`${rowLabel}: No. TM bahan wajib diisi.`);
+          if (!line.sourceWarehouse) return alert(`${rowLabel}: gudang asal wajib diisi.`);
+        }
+
+        const receiptGroupId = `IN-GRP-${timestamp}`;
+        const batch = writeBatch(db);
+
+        normalizedLines.forEach((line, index) => {
+          const batchId = `INB-${timestamp}-${index + 1}`;
+          const txId = `TRX-${timestamp}-IN-${index + 1}`;
+
+          batch.set(
             doc(db, "artifacts", appId, "public", "data", "batches", batchId),
-            batchData
+            {
+              batchId,
+              receiptGroupId,
+              skuId: line.sku.id,
+              initialQty: line.qtyValue,
+              currentQty: line.qtyValue,
+              sourceWarehouse: line.sourceWarehouse,
+              moNumber: line.moNumber,
+              tmNumber: line.tmNumber,
+              date,
+              ...auditMeta,
+            }
           );
-          transaction.set(
+
+          batch.set(
             doc(db, "artifacts", appId, "public", "data", "transactions", txId),
-            txData
+            {
+              id: txId,
+              receiptGroupId,
+              date,
+              type: "INBOUND",
+              skuId: line.sku.id,
+              skuName: line.sku.name,
+              qtyChange: line.qtyValue,
+              unit: line.sku.unit,
+              operator: currentUser.username,
+              sourceWarehouse: line.sourceWarehouse,
+              moNumber: line.moNumber,
+              tmNumber: line.tmNumber,
+              batchId,
+              ...auditMeta,
+            }
           );
         });
+
+        await batch.commit();
       } else if (activeOpTab === "rebagging") {
         const targetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
         const qty = Number(formData.qtyToProcess);
@@ -1197,11 +1184,11 @@ export default function App() {
         const processQty = Number(formData.rebagProcessQty || 0);
         const damageQty = Number(formData.rebagDamageQty || 0);
         const totalResultQty = goodQty + processQty + damageQty;
-        const moNumber = formData.rebagMoNumber?.trim() || "";
+        const resultTmNumber = String(formData.rebagResultTmNumber || "").trim();
 
         if (!targetSku) return alert("Pilih SKU hasil rebagging.");
-        if (!moNumber) return alert("Pilih No. MO proses rebagging.");
-        if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas proses harus lebih dari 0.");
+        if (!resultTmNumber) return alert("TM Hasil wajib diisi pada proses Rebagging.");
+        if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas hasil yang diproses harus lebih dari 0.");
         if (
           ![goodQty, processQty, damageQty].every((value) => Number.isFinite(value) && value >= 0)
         ) {
@@ -1221,21 +1208,13 @@ export default function App() {
         if (recipe) {
           for (const materialSkuId of recipe.materials) {
             const selection = rebagMaterialSelections[materialSkuId] || {};
-            const sourceBatch = inventoryBatches.find(
-              (b) => b.batchId === selection.batchId
-            );
+            const sourceBatch = inventoryBatches.find((b) => b.batchId === selection.batchId);
             const sourceSku = skus.find((s) => s.id === materialSkuId);
             const materialQty = Number(selection.qty);
 
-            if (!sourceBatch) {
-              return alert(`Pilih batch/TM untuk bahan ${materialSkuId}.`);
-            }
-            if (sourceBatch.moNumber !== moNumber) {
-              return alert(`Batch bahan ${materialSkuId} tidak sesuai dengan MO ${moNumber}.`);
-            }
-            if (!sourceBatch.tmNumber) {
-              return alert(`Batch bahan ${materialSkuId} belum memiliki No. TM.`);
-            }
+            if (!sourceBatch) return alert(`Pilih batch untuk bahan ${materialSkuId}.`);
+            if (!sourceBatch.moNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. MO.`);
+            if (!sourceBatch.tmNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. TM.`);
             if (!Number.isFinite(materialQty) || materialQty <= 0) {
               return alert(`Isi jumlah pemakaian bahan ${materialSkuId} lebih dari 0.`);
             }
@@ -1252,28 +1231,20 @@ export default function App() {
               skuId: materialSkuId,
               skuName: sourceSku?.name || materialSkuId,
               batchId: sourceBatch.batchId,
-              moNumber: sourceBatch.moNumber || "",
-              tmNumber: sourceBatch.tmNumber || "",
+              moNumber: sourceBatch.moNumber,
+              tmNumber: sourceBatch.tmNumber,
               qty: materialQty,
               unit: sourceSku?.unit || "",
               sourceWarehouse: sourceBatch.sourceWarehouse || "",
             });
           }
-
-          const tmValues = selectedMaterials.map((m) => m.tmNumber).filter(Boolean);
-          if (new Set(tmValues).size !== tmValues.length) {
-            return alert("No. TM setiap bahan pada komposisi ini harus berbeda.");
-          }
         } else {
-          const selectedBatch = inventoryBatches.find(
-            (b) => b.batchId === formData.bulkBatchId
-          );
+          const selectedBatch = inventoryBatches.find((b) => b.batchId === formData.bulkBatchId);
           const sourceSku = skus.find((s) => s.id === selectedBatch?.skuId);
 
           if (!selectedBatch) return alert("Pilih batch bahan baku yang valid.");
-          if (selectedBatch.moNumber && selectedBatch.moNumber !== moNumber) {
-            return alert("Batch bahan baku tidak sesuai dengan No. MO yang dipilih.");
-          }
+          if (!selectedBatch.moNumber) return alert("Batch bahan baku belum memiliki No. MO.");
+          if (!selectedBatch.tmNumber) return alert("Batch bahan baku belum memiliki No. TM.");
           if (
             selectedBatch.date &&
             new Date(date).getTime() < new Date(selectedBatch.date).getTime()
@@ -1286,8 +1257,8 @@ export default function App() {
               skuId: sourceSku?.id || selectedBatch.skuId || "",
               skuName: sourceSku?.name || selectedBatch.skuId || "Bahan Baku",
               batchId: selectedBatch.batchId,
-              moNumber: selectedBatch.moNumber || moNumber,
-              tmNumber: selectedBatch.tmNumber || "",
+              moNumber: selectedBatch.moNumber,
+              tmNumber: selectedBatch.tmNumber,
               qty,
               unit: sourceSku?.unit || "",
               sourceWarehouse: selectedBatch.sourceWarehouse || "",
@@ -1295,31 +1266,16 @@ export default function App() {
           ];
         }
 
-        const resultTmNumber =
-          getResultTmForMo(moNumber) ||
-          selectedMaterials
-            .map((m) =>
-              inventoryBatches.find((b) => b.batchId === m.batchId)?.resultTmNumber
-            )
-            .find(Boolean) ||
-          "";
-
-        if (!resultTmNumber) {
-          return alert(
-            `TM Hasil untuk MO ${moNumber} belum tercatat. Input TM Hasil terlebih dahulu pada proses Inbound salah satu bahan dengan MO tersebut.`
-          );
-        }
-
         const newBatchId = `RBG-${timestamp}`;
         const txId = `TRX-${timestamp}`;
+        const sourceMoNumbers = [...new Set(selectedMaterials.map((m) => m.moNumber).filter(Boolean))];
+        const sourceTmNumbers = [...new Set(selectedMaterials.map((m) => m.tmNumber).filter(Boolean))];
 
         await runTransaction(db, async (transaction) => {
           const materialRefs = selectedMaterials.map((material) =>
             doc(db, "artifacts", appId, "public", "data", "batches", material.batchId)
           );
-          const materialSnaps = await Promise.all(
-            materialRefs.map((ref) => transaction.get(ref))
-          );
+          const materialSnaps = await Promise.all(materialRefs.map((ref) => transaction.get(ref)));
 
           materialSnaps.forEach((snap, index) => {
             if (!snap.exists()) {
@@ -1329,11 +1285,6 @@ export default function App() {
             const liveQty = Number(liveBatch.currentQty) || 0;
             const requestedQty = Number(selectedMaterials[index].qty) || 0;
 
-            if (liveBatch.moNumber && liveBatch.moNumber !== moNumber) {
-              throw new Error(
-                `MO batch bahan ${selectedMaterials[index].skuId} berubah dan tidak lagi sesuai.`
-              );
-            }
             if (requestedQty > liveQty) {
               throw new Error(
                 `Pemakaian ${selectedMaterials[index].skuId} melebihi stok terbaru (${liveQty}).`
@@ -1368,7 +1319,9 @@ export default function App() {
             sourceBatchId: primaryMaterial?.batchId || "",
             sourceBatchIds: selectedMaterials.map((m) => m.batchId),
             materials: selectedMaterials,
-            moNumber,
+            moNumber: sourceMoNumbers.join(", "),
+            sourceMoNumbers,
+            sourceTmNumbers,
             resultTmNumber,
             expiryDate: formData.rebagExpiryDate,
             productionDate: date,
@@ -1402,7 +1355,9 @@ export default function App() {
               executor: "KOPEL JAYA",
               productionDate: date,
               expiryDate: formData.rebagExpiryDate,
-              moNumber,
+              moNumber: sourceMoNumbers.join(", "),
+              sourceMoNumbers,
+              sourceTmNumbers,
               resultTmNumber,
               targetStack: formData.rebagTargetStack,
               sourceWarehouse: sourceWarehouses,
@@ -1426,14 +1381,10 @@ export default function App() {
         if (!sku) return alert("Pilih barang yang akan dikeluarkan.");
 
         const isFinishedGoods = sku.type === "rebagged";
-        const outboundMo = formData.outMoNumber?.trim() || "";
         const outboundTm = formData.outTmNumber?.trim() || "";
 
-        if (isFinishedGoods && !outboundMo) {
-          return alert("Pilih No. MO untuk outbound produk jadi.");
-        }
         if (isFinishedGoods && !outboundTm) {
-          return alert("TM Hasil untuk MO yang dipilih belum tersedia.");
+          return alert("Pilih TM Hasil untuk outbound produk jadi.");
         }
 
         const selections = Object.entries(outboundSelections)
@@ -1450,8 +1401,8 @@ export default function App() {
           if (!item.localBatch || item.localBatch.skuId !== sku.id) {
             return alert(`Batch ${item.batchId} tidak valid untuk SKU yang dipilih.`);
           }
-          if (isFinishedGoods && item.localBatch.moNumber !== outboundMo) {
-            return alert(`Batch ${item.batchId} tidak sesuai dengan MO ${outboundMo}.`);
+          if (isFinishedGoods && item.localBatch.resultTmNumber !== outboundTm) {
+            return alert(`Batch ${item.batchId} tidak sesuai dengan TM Hasil ${outboundTm}.`);
           }
           if (
             item.localBatch.date &&
@@ -1502,7 +1453,9 @@ export default function App() {
                 operator: currentUser.username,
                 batchId: item.batchId,
                 sourceWarehouse: liveBatch.sourceWarehouse || "",
-                moNumber: isFinishedGoods ? outboundMo : (liveBatch.moNumber || ""),
+                moNumber: liveBatch.moNumber || "",
+                sourceMoNumbers: liveBatch.sourceMoNumbers || [],
+                sourceTmNumbers: liveBatch.sourceTmNumbers || [],
                 tmNumber: isFinishedGoods ? outboundTm : (liveBatch.tmNumber || ""),
                 resultTmNumber: isFinishedGoods ? outboundTm : (liveBatch.resultTmNumber || ""),
                 soNumber: formData.outSoNumber?.trim() || "",
@@ -1516,6 +1469,9 @@ export default function App() {
 
       showNotif("Transaksi Berhasil Disimpan");
       setFormData(initialFormData);
+      setInboundLines([
+        { rowId: `IN-${Date.now()}`, skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }
+      ]);
       setOutboundSelections({});
       setRebagMaterialSelections({});
     } catch (error) {
