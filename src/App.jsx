@@ -27,35 +27,70 @@ const DEFAULT_USERS = [
   { username: "operator", password: "123456", role: "Operator" },
 ];
 
-const REBAG_RECIPES = [
+const DEFAULT_REBAG_RECIPES = [
   {
-    key: "FORTIVIT_1KG",
+    id: "FORTIVIT_1KG",
     targetSku: "B0030038X",
     label: "Fortivit 1 Kg",
-    materials: ["A0020003X", "A0210001X", "D0200129X", "D0200111X"],
+    active: true,
+    notes: "",
+    materials: [
+      { skuId: "A0020003X", required: true, order: 1 },
+      { skuId: "A0210001X", required: true, order: 2 },
+      { skuId: "D0200129X", required: true, order: 3 },
+      { skuId: "D0200111X", required: true, order: 4 },
+    ],
   },
   {
-    key: "FORTIVIT_5KG",
+    id: "FORTIVIT_5KG",
     targetSku: "B0030039X",
     label: "Fortivit 5 Kg",
-    materials: ["A0020003X", "A0210001X", "D0200084X"],
+    active: true,
+    notes: "",
+    materials: [
+      { skuId: "A0020003X", required: true, order: 1 },
+      { skuId: "A0210001X", required: true, order: 2 },
+      { skuId: "D0200084X", required: true, order: 3 },
+    ],
   },
   {
-    key: "GULA",
+    id: "GULA",
+    targetSku: "",
     matchName: "GULA",
     label: "Rebag Gula",
-    materials: ["A0060004X", "D0200062X", "D0200130X"],
+    active: true,
+    notes: "Preset awal. Pilih SKU produk jadi gula pada Master Komposisi agar aturan tidak bergantung pada nama produk.",
+    materials: [
+      { skuId: "A0060004X", required: true, order: 1 },
+      { skuId: "D0200062X", required: true, order: 2 },
+      { skuId: "D0200130X", required: true, order: 3 },
+    ],
   },
 ];
 
-const getRebagRecipe = (targetSku) => {
+const normalizeRecipeMaterials = (recipe) =>
+  (recipe?.materials || [])
+    .map((item, index) =>
+      typeof item === "string"
+        ? { skuId: item, required: true, order: index + 1 }
+        : {
+            skuId: item?.skuId || "",
+            required: item?.required !== false,
+            order: Number(item?.order) || index + 1,
+          }
+    )
+    .filter((item) => item.skuId)
+    .sort((a, b) => a.order - b.order);
+
+const getRebagRecipe = (targetSku, recipes = []) => {
   if (!targetSku) return null;
+  const activeRecipes = recipes.filter((recipe) => recipe.active !== false);
   return (
-    REBAG_RECIPES.find((recipe) => recipe.targetSku === targetSku.id) ||
-    REBAG_RECIPES.find(
+    activeRecipes.find((recipe) => recipe.targetSku === targetSku.id) ||
+    activeRecipes.find(
       (recipe) =>
         recipe.matchName &&
-        String(targetSku.name || "").toUpperCase().includes(recipe.matchName)
+        String(targetSku.name || "").toUpperCase().includes(String(recipe.matchName).toUpperCase())
     ) ||
     null
   );
@@ -788,6 +823,7 @@ export default function App() {
   const [skus, setSkus] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [inventoryBatches, setInventoryBatches] = useState([]);
+  const [rebagRecipes, setRebagRecipes] = useState(DEFAULT_REBAG_RECIPES);
   const [systemConfig, setSystemConfig] = useState({ name: "Sistem Rebagging Terpadu", logo: null });
   
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
@@ -828,6 +864,14 @@ export default function App() {
 
   const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG" });
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
+  const [editingRecipeId, setEditingRecipeId] = useState("");
+  const [recipeForm, setRecipeForm] = useState({
+    targetSku: "",
+    label: "",
+    active: true,
+    notes: "",
+    materials: [{ rowId: "MAT-1", skuId: "", required: true }],
+  });
 
   useEffect(() => {
     if (!auth) {
@@ -901,6 +945,30 @@ export default function App() {
       handleDbError("stok batch")
     );
 
+    const unsubRecipes = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "recipes"),
+      (snap) => {
+        if (snap.empty) {
+          setRebagRecipes(DEFAULT_REBAG_RECIPES);
+          Promise.all(
+            DEFAULT_REBAG_RECIPES.map((recipe) =>
+              setDoc(
+                doc(db, "artifacts", appId, "public", "data", "recipes", recipe.id),
+                recipe
+              )
+            )
+          ).catch(handleDbError("inisialisasi komposisi"));
+        } else {
+          setRebagRecipes(
+            snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .sort((a, b) => String(a.label || "").localeCompare(String(b.label || "")))
+          );
+        }
+      },
+      handleDbError("komposisi rebagging")
+    );
+
     const unsubTx = onSnapshot(
       collection(db, "artifacts", appId, "public", "data", "transactions"),
       (snap) => {
@@ -925,6 +993,7 @@ export default function App() {
       unsubUsers();
       unsubSkus();
       unsubBatches();
+      unsubRecipes();
       unsubTx();
       unsubConfig();
     };
@@ -940,7 +1009,8 @@ export default function App() {
   );
 
   const selectedRebagTargetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
-  const activeRebagRecipe = getRebagRecipe(selectedRebagTargetSku);
+  const activeRebagRecipe = getRebagRecipe(selectedRebagTargetSku, rebagRecipes);
+  const activeRebagMaterials = normalizeRecipeMaterials(activeRebagRecipe);
 
   const outboundSelectedSku = skus.find((s) => s.id === formData.outSkuId);
   const outboundIsFinishedGoods = outboundSelectedSku?.type === "rebagged";
@@ -1206,13 +1276,24 @@ export default function App() {
         let selectedMaterials = [];
 
         if (recipe) {
-          for (const materialSkuId of recipe.materials) {
+          const recipeMaterials = normalizeRecipeMaterials(recipe);
+
+          for (const recipeMaterial of recipeMaterials) {
+            const materialSkuId = recipeMaterial.skuId;
             const selection = rebagMaterialSelections[materialSkuId] || {};
             const sourceBatch = inventoryBatches.find((b) => b.batchId === selection.batchId);
             const sourceSku = skus.find((s) => s.id === materialSkuId);
             const materialQty = Number(selection.qty);
+            const hasSelection = Boolean(selection.batchId) || Boolean(selection.qty);
 
-            if (!sourceBatch) return alert(`Pilih batch untuk bahan ${materialSkuId}.`);
+            if (!recipeMaterial.required && !hasSelection) {
+              continue;
+            }
+            if (!sourceBatch) {
+              return alert(
+                `Pilih batch untuk bahan ${materialSkuId}${recipeMaterial.required ? "" : " atau kosongkan bahan opsional ini"}.`
+              );
+            }
             if (!sourceBatch.moNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. MO.`);
             if (!sourceBatch.tmNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. TM.`);
             if (!Number.isFinite(materialQty) || materialQty <= 0) {
@@ -1230,6 +1311,7 @@ export default function App() {
             selectedMaterials.push({
               skuId: materialSkuId,
               skuName: sourceSku?.name || materialSkuId,
+              required: recipeMaterial.required,
               batchId: sourceBatch.batchId,
               moNumber: sourceBatch.moNumber,
               tmNumber: sourceBatch.tmNumber,
@@ -1237,6 +1319,10 @@ export default function App() {
               unit: sourceSku?.unit || "",
               sourceWarehouse: sourceBatch.sourceWarehouse || "",
             });
+          }
+
+          if (selectedMaterials.length === 0) {
+            return alert("Pilih minimal satu bahan untuk proses Rebagging.");
           }
         } else {
           const selectedBatch = inventoryBatches.find((b) => b.batchId === formData.bulkBatchId);
@@ -1371,7 +1457,7 @@ export default function App() {
               finishedQty: goodQty,
               finishedUnit: targetSku.unit,
               batchId: newBatchId,
-              recipeKey: recipe?.key || "MANUAL",
+              recipeKey: recipe?.id || "MANUAL",
               ...auditMeta,
             }
           );
@@ -1559,6 +1645,149 @@ export default function App() {
       console.error("Process Resolution Error:", error);
       alert(`Gagal menindaklanjuti PROCESS: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
     }
+  };
+
+  const resetRecipeForm = () => {
+    setEditingRecipeId("");
+    setRecipeForm({
+      targetSku: "",
+      label: "",
+      active: true,
+      notes: "",
+      materials: [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true }],
+    });
+  };
+
+  const addRecipeMaterialLine = () => {
+    setRecipeForm((prev) => ({
+      ...prev,
+      materials: [
+        ...prev.materials,
+        { rowId: `MAT-${Date.now()}-${prev.materials.length + 1}`, skuId: "", required: true },
+      ],
+    }));
+  };
+
+  const updateRecipeMaterialLine = (rowId, field, value) => {
+    setRecipeForm((prev) => ({
+      ...prev,
+      materials: prev.materials.map((item) =>
+        item.rowId === rowId ? { ...item, [field]: value } : item
+      ),
+    }));
+  };
+
+  const removeRecipeMaterialLine = (rowId) => {
+    setRecipeForm((prev) => {
+      const next = prev.materials.filter((item) => item.rowId !== rowId);
+      return {
+        ...prev,
+        materials:
+          next.length > 0
+            ? next
+            : [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true }],
+      };
+    });
+  };
+
+  const handleEditRecipe = (recipe) => {
+    const materials = normalizeRecipeMaterials(recipe).map((item, index) => ({
+      rowId: `MAT-EDIT-${index + 1}-${Date.now()}`,
+      skuId: item.skuId,
+      required: item.required,
+    }));
+    setEditingRecipeId(recipe.id);
+    setRecipeForm({
+      targetSku: recipe.targetSku || "",
+      label: recipe.label || "",
+      active: recipe.active !== false,
+      notes: recipe.notes || "",
+      materials:
+        materials.length > 0
+          ? materials
+          : [{ rowId: `MAT-${Date.now()}`, skuId: "", required: true }],
+    });
+    setActiveTabSettings("recipes");
+  };
+
+  const handleSaveRecipe = async (e) => {
+    e.preventDefault();
+
+    if (!isVerifiedSuperAdmin) {
+      return alert("Hanya Super Admin yang dapat mengubah Master Komposisi.");
+    }
+    if (!db) return alert("Database belum siap.");
+
+    const targetSku = String(recipeForm.targetSku || "").trim();
+    const label = String(recipeForm.label || "").trim();
+    const materials = recipeForm.materials
+      .map((item, index) => ({
+        skuId: String(item.skuId || "").trim(),
+        required: item.required !== false,
+        order: index + 1,
+      }))
+      .filter((item) => item.skuId);
+
+    if (!targetSku) return alert("Pilih SKU Produk Jadi.");
+    if (!label) return alert("Nama komposisi wajib diisi.");
+    if (materials.length === 0) return alert("Tambahkan minimal satu SKU bahan.");
+
+    const duplicateMaterial = materials.find(
+      (item, index) =>
+        materials.findIndex((other) => other.skuId === item.skuId) !== index
+    );
+    if (duplicateMaterial) {
+      return alert(`SKU bahan ${duplicateMaterial.skuId} tercantum lebih dari satu kali.`);
+    }
+
+    const duplicateTarget = rebagRecipes.find(
+      (recipe) =>
+        recipe.id !== editingRecipeId &&
+        recipe.targetSku === targetSku &&
+        recipe.active !== false &&
+        recipeForm.active !== false
+    );
+    if (duplicateTarget) {
+      return alert(
+        `Produk jadi ini sudah memiliki komposisi aktif: ${duplicateTarget.label}. Nonaktifkan atau edit komposisi tersebut terlebih dahulu.`
+      );
+    }
+
+    const recipeId = editingRecipeId || `REC-${targetSku}-${Date.now()}`;
+    const existing = rebagRecipes.find((recipe) => recipe.id === editingRecipeId);
+
+    await setDoc(
+      doc(db, "artifacts", appId, "public", "data", "recipes", recipeId),
+      {
+        id: recipeId,
+        targetSku,
+        label,
+        active: recipeForm.active !== false,
+        notes: String(recipeForm.notes || "").trim(),
+        materials,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.username,
+      }
+    );
+
+    showNotif(editingRecipeId ? "Komposisi berhasil diperbarui" : "Komposisi berhasil ditambahkan");
+    resetRecipeForm();
+  };
+
+  const handleDeleteRecipe = async (recipe) => {
+    if (!isVerifiedSuperAdmin) {
+      return alert("Hanya Super Admin yang dapat menghapus Master Komposisi.");
+    }
+    if (!window.confirm(`Hapus komposisi "${recipe.label}"? Data transaksi lama tidak akan ikut terhapus.`)) {
+      return;
+    }
+
+    await deleteDoc(
+      doc(db, "artifacts", appId, "public", "data", "recipes", recipe.id)
+    );
+    if (editingRecipeId === recipe.id) resetRecipeForm();
+    showNotif("Komposisi berhasil dihapus");
   };
 
   const handleAddManualSku = async (e) => {
