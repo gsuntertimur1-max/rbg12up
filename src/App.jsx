@@ -133,6 +133,97 @@ const getPrimaryMoNumber = (record) => {
   return moNumber.includes(",") ? moNumber.split(",")[0].trim() : moNumber;
 };
 
+const getBatchExpiryInfo = (batch, referenceDate = new Date()) => {
+  const raw = batch?.expiryDate || batch?.expired || batch?.expiry || "";
+  if (!raw) {
+    return {
+      hasExpiry: false,
+      isExpired: false,
+      daysRemaining: null,
+      label: "FIFO",
+      priority: 999999,
+    };
+  }
+
+  const expiry = new Date(raw);
+  if (Number.isNaN(expiry.getTime())) {
+    return {
+      hasExpiry: false,
+      isExpired: false,
+      daysRemaining: null,
+      label: "FIFO",
+      priority: 999999,
+    };
+  }
+
+  const ref = new Date(referenceDate);
+  ref.setHours(0, 0, 0, 0);
+  expiry.setHours(23, 59, 59, 999);
+  const daysRemaining = Math.ceil((expiry.getTime() - ref.getTime()) / 86400000);
+
+  let label = "FEFO";
+  if (daysRemaining < 0) label = "EXPIRED";
+  else if (daysRemaining <= 30) label = "< 30 HARI";
+  else if (daysRemaining <= 60) label = "< 60 HARI";
+  else if (daysRemaining <= 90) label = "< 90 HARI";
+
+  return {
+    hasExpiry: true,
+    isExpired: daysRemaining < 0,
+    daysRemaining,
+    label,
+    priority: expiry.getTime(),
+  };
+};
+
+const sortBatchesFefoFifo = (batches, referenceDate = new Date()) =>
+  [...batches].sort((a, b) => {
+    const aExpiry = getBatchExpiryInfo(a, referenceDate);
+    const bExpiry = getBatchExpiryInfo(b, referenceDate);
+
+    if (aExpiry.hasExpiry && bExpiry.hasExpiry) {
+      if (aExpiry.priority !== bExpiry.priority) return aExpiry.priority - bExpiry.priority;
+    } else if (aExpiry.hasExpiry !== bExpiry.hasExpiry) {
+      return aExpiry.hasExpiry ? -1 : 1;
+    }
+
+    const aDate = new Date(a.date || a.productionDate || 0).getTime() || 0;
+    const bDate = new Date(b.date || b.productionDate || 0).getTime() || 0;
+    return aDate - bDate;
+  });
+
+const getBatchRecommendationLabel = (batch, allBatches, referenceDate = new Date()) => {
+  const sorted = sortBatchesFefoFifo(allBatches, referenceDate);
+  const firstUsable = sorted.find((item) => !getBatchExpiryInfo(item, referenceDate).isExpired);
+  const expiryInfo = getBatchExpiryInfo(batch, referenceDate);
+  const isRecommended = firstUsable?.batchId === batch?.batchId;
+
+  if (expiryInfo.isExpired) return "EXPIRED";
+  if (isRecommended) return expiryInfo.hasExpiry ? "REKOMENDASI FEFO" : "REKOMENDASI FIFO";
+  return expiryInfo.label;
+};
+
+const createRebagAllocation = () => ({
+  rowId: `SRC-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  batchId: "",
+  qty: "",
+  damageQty: "",
+});
+
+const normalizeRebagAllocations = (selection) => {
+  if (Array.isArray(selection)) return selection;
+  if (Array.isArray(selection?.allocations)) return selection.allocations;
+  if (selection && (selection.batchId || selection.qty || selection.damageQty)) {
+    return [{
+      rowId: selection.rowId || `LEGACY-${selection.batchId || Date.now()}`,
+      batchId: selection.batchId || "",
+      qty: selection.qty || "",
+      damageQty: selection.damageQty || "",
+    }];
+  }
+  return [];
+};
+
 const getSuggestedMaterialStandard = (targetSku, materialSku) => {
   const targetName = String(targetSku?.name || "").toUpperCase();
   const materialName = String(materialSku?.name || "").toUpperCase();
@@ -1205,7 +1296,48 @@ export default function App() {
       bulkBatchId: "",
       rebagResultTmNumber: "",
     }));
-    setRebagMaterialSelections({});
+
+    const targetSku = skus.find((s) => s.id === value);
+    const recipe = getRebagRecipe(targetSku, rebagRecipes);
+    const initialSelections = {};
+    normalizeRecipeMaterials(recipe).forEach((material) => {
+      initialSelections[material.skuId] = [createRebagAllocation()];
+    });
+    setRebagMaterialSelections(initialSelections);
+  };
+
+  const updateRebagAllocation = (skuId, rowId, field, value) => {
+    setRebagMaterialSelections((prev) => {
+      const rows = normalizeRebagAllocations(prev[skuId]);
+      return {
+        ...prev,
+        [skuId]: rows.map((row) =>
+          row.rowId === rowId ? { ...row, [field]: value } : row
+        ),
+      };
+    });
+  };
+
+  const addRebagAllocation = (skuId) => {
+    setRebagMaterialSelections((prev) => ({
+      ...prev,
+      [skuId]: [
+        ...normalizeRebagAllocations(prev[skuId]),
+        createRebagAllocation(),
+      ],
+    }));
+  };
+
+  const removeRebagAllocation = (skuId, rowId) => {
+    setRebagMaterialSelections((prev) => {
+      const rows = normalizeRebagAllocations(prev[skuId]).filter(
+        (row) => row.rowId !== rowId
+      );
+      return {
+        ...prev,
+        [skuId]: rows.length > 0 ? rows : [createRebagAllocation()],
+      };
+    });
   };
 
   const handleOutboundSkuChange = (value) => {
@@ -1430,75 +1562,158 @@ export default function App() {
         if (recipe) {
           const recipeMaterials = normalizeRecipeMaterials(recipe);
 
-          for (const recipeMaterial of recipeMaterials) {
+          for (let materialIndex = 0; materialIndex < recipeMaterials.length; materialIndex += 1) {
+            const recipeMaterial = recipeMaterials[materialIndex];
             const materialSkuId = recipeMaterial.skuId;
-            const selection = rebagMaterialSelections[materialSkuId] || {};
-            const sourceBatch = inventoryBatches.find((b) => b.batchId === selection.batchId);
-            const sourceSku = skus.find((s) => s.id === materialSkuId);
-            const calculatedQty = getCalculatedMaterialQty(recipeMaterial, qty);
-            const usedQty =
-              recipeMaterial.calculationMode === "per_output"
-                ? Number(calculatedQty || 0)
-                : Number(selection.qty);
-            const materialDamageQty = Number(selection.damageQty || 0);
-            const totalMaterialQty = usedQty + materialDamageQty;
-            const hasSelection =
-              Boolean(selection.batchId) ||
-              Boolean(selection.qty) ||
-              materialDamageQty > 0;
+            const sourceSku = skus.find((item) => item.id === materialSkuId);
+            const allocations = normalizeRebagAllocations(
+              rebagMaterialSelections[materialSkuId]
+            ).filter(
+              (allocation) =>
+                allocation.batchId ||
+                Number(allocation.qty || 0) > 0 ||
+                Number(allocation.damageQty || 0) > 0
+            );
 
-            if (!recipeMaterial.required && !hasSelection) {
+            if (!recipeMaterial.required && allocations.length === 0) {
               continue;
             }
-            if (!sourceBatch) {
-              return alert(
-                `Pilih batch untuk bahan ${materialSkuId}${recipeMaterial.required ? "" : " atau kosongkan bahan opsional ini"}.`
+            if (allocations.length === 0) {
+              return alert(`Pilih minimal satu batch untuk bahan ${materialSkuId}.`);
+            }
+
+            const selectedBatchIds = allocations.map((allocation) => allocation.batchId).filter(Boolean);
+            if (new Set(selectedBatchIds).size !== selectedBatchIds.length) {
+              return alert(`Batch sumber untuk bahan ${materialSkuId} tidak boleh dipilih lebih dari satu kali.`);
+            }
+
+            const calculatedQty = getCalculatedMaterialQty(recipeMaterial, qty);
+            let materialUsedTotal = 0;
+            let materialDamageTotal = 0;
+            const materialLines = [];
+
+            for (let allocationIndex = 0; allocationIndex < allocations.length; allocationIndex += 1) {
+              const allocation = allocations[allocationIndex];
+              const sourceBatch = inventoryBatches.find(
+                (batch) => batch.batchId === allocation.batchId
               );
+              const usedQty = Number(allocation.qty || 0);
+              const materialDamageQty = Number(allocation.damageQty || 0);
+              const totalMaterialQty = usedQty + materialDamageQty;
+
+              if (!sourceBatch) {
+                return alert(
+                  `Pilih batch yang valid untuk bahan ${materialSkuId} sumber ${allocationIndex + 1}.`
+                );
+              }
+              if (!sourceBatch.moNumber) {
+                return alert(`Batch bahan ${materialSkuId} belum memiliki No. MO.`);
+              }
+              if (!sourceBatch.tmNumber) {
+                return alert(`Batch bahan ${materialSkuId} belum memiliki No. TM.`);
+              }
+              if (!Number.isFinite(usedQty) || usedQty < 0) {
+                return alert(`Qty dipakai bahan ${materialSkuId} sumber ${allocationIndex + 1} tidak valid.`);
+              }
+              if (!Number.isFinite(materialDamageQty) || materialDamageQty < 0) {
+                return alert(`Qty rusak bahan ${materialSkuId} sumber ${allocationIndex + 1} tidak valid.`);
+              }
+              if (!Number.isFinite(totalMaterialQty) || totalMaterialQty <= 0) {
+                return alert(
+                  `Isi Qty Dipakai atau Qty Rusak untuk bahan ${materialSkuId} sumber ${allocationIndex + 1}.`
+                );
+              }
+              if (
+                sourceBatch.date &&
+                new Date(date).getTime() < new Date(sourceBatch.date).getTime()
+              ) {
+                return alert(
+                  `Tanggal rebagging tidak boleh lebih awal dari tanggal masuk batch ${sourceBatch.batchId}.`
+                );
+              }
+
+              const expiryInfo = getBatchExpiryInfo(sourceBatch, new Date(date));
+              if (expiryInfo.isExpired && !isVerifiedSuperAdmin) {
+                return alert(
+                  `Batch ${sourceBatch.batchId} sudah EXPIRED dan tidak dapat digunakan untuk Rebagging.`
+                );
+              }
+              if (expiryInfo.isExpired && isVerifiedSuperAdmin) {
+                const allowExpired = window.confirm(
+                  `PERINGATAN: Batch ${sourceBatch.batchId} sudah EXPIRED.\n\nLanjutkan sebagai override Super Admin?`
+                );
+                if (!allowExpired) return;
+              }
+
+              materialUsedTotal += usedQty;
+              materialDamageTotal += materialDamageQty;
+              materialLines.push({
+                skuId: materialSkuId,
+                skuName: sourceSku?.name || materialSkuId,
+                required: recipeMaterial.required,
+                isPrimaryMaterial: materialIndex === 0,
+                allocationIndex: allocationIndex + 1,
+                calculationMode: recipeMaterial.calculationMode || "manual",
+                outputPerUnit: recipeMaterial.outputPerUnit || "",
+                standardQty:
+                  recipeMaterial.calculationMode === "per_output"
+                    ? Number(calculatedQty || 0)
+                    : null,
+                usedQty,
+                damageQty: materialDamageQty,
+                totalQty: totalMaterialQty,
+                batchId: sourceBatch.batchId,
+                moNumber: sourceBatch.moNumber,
+                tmNumber: sourceBatch.tmNumber,
+                qty: totalMaterialQty,
+                unit: sourceSku?.unit || "",
+                sourceWarehouse: sourceBatch.sourceWarehouse || "",
+                expiryDate: sourceBatch.expiryDate || "",
+                expiredOverride: expiryInfo.isExpired,
+                expiredOverrideBy: expiryInfo.isExpired ? currentUser.username : "",
+              });
             }
-            if (!sourceBatch.moNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. MO.`);
-            if (!sourceBatch.tmNumber) return alert(`Batch bahan ${materialSkuId} belum memiliki No. TM.`);
-            if (!Number.isFinite(materialDamageQty) || materialDamageQty < 0) {
-              return alert(`Qty rusak bahan ${materialSkuId} tidak valid.`);
-            }
+
             if (
               recipeMaterial.calculationMode === "per_output" &&
               (!Number.isFinite(Number(recipeMaterial.outputPerUnit)) ||
                 Number(recipeMaterial.outputPerUnit) <= 0)
             ) {
-              return alert(`Standar isi kemasan bahan ${materialSkuId} belum valid di Master Komposisi.`);
-            }
-            if (!Number.isFinite(usedQty) || usedQty <= 0) {
-              return alert(`Jumlah pemakaian bahan ${materialSkuId} harus lebih dari 0.`);
-            }
-            if (!Number.isFinite(totalMaterialQty) || totalMaterialQty <= 0) {
-              return alert(`Total pemakaian bahan ${materialSkuId} tidak valid.`);
-            }
-            if (
-              sourceBatch.date &&
-              new Date(date).getTime() < new Date(sourceBatch.date).getTime()
-            ) {
               return alert(
-                `Tanggal rebagging tidak boleh lebih awal dari tanggal masuk bahan ${materialSkuId}.`
+                `Standar isi kemasan bahan ${materialSkuId} belum valid di Master Komposisi.`
               );
             }
 
-            selectedMaterials.push({
-              skuId: materialSkuId,
-              skuName: sourceSku?.name || materialSkuId,
-              required: recipeMaterial.required,
-              calculationMode: recipeMaterial.calculationMode || "manual",
-              outputPerUnit: recipeMaterial.outputPerUnit || "",
-              standardQty:
-                recipeMaterial.calculationMode === "per_output" ? usedQty : null,
-              usedQty,
-              damageQty: materialDamageQty,
-              totalQty: totalMaterialQty,
-              batchId: sourceBatch.batchId,
-              moNumber: sourceBatch.moNumber,
-              tmNumber: sourceBatch.tmNumber,
-              qty: totalMaterialQty,
-              unit: sourceSku?.unit || "",
-              sourceWarehouse: sourceBatch.sourceWarehouse || "",
+            if (
+              recipeMaterial.calculationMode === "per_output" &&
+              Math.abs(materialUsedTotal - Number(calculatedQty || 0)) > 0.0001
+            ) {
+              return alert(
+                `Total Qty Dipakai ${materialSkuId} harus sama dengan kebutuhan standar ${calculatedQty}. Saat ini: ${materialUsedTotal}.`
+              );
+            }
+
+            if (recipeMaterial.calculationMode !== "per_output" && materialUsedTotal <= 0) {
+              return alert(`Total Qty Dipakai bahan ${materialSkuId} harus lebih dari 0.`);
+            }
+
+            if (materialIndex === 0) {
+              const primaryMos = [
+                ...new Set(materialLines.map((line) => line.moNumber).filter(Boolean)),
+              ];
+              if (primaryMos.length !== 1) {
+                return alert(
+                  `Bahan utama boleh memakai beberapa batch, tetapi seluruh batch harus berasal dari MO Utama yang sama. MO terpilih: ${primaryMos.join(", ")}.`
+                );
+              }
+            }
+
+            materialLines.forEach((line) => {
+              selectedMaterials.push({
+                ...line,
+                materialUsedTotal,
+                materialDamageTotal,
+              });
             });
           }
 
@@ -1543,7 +1758,9 @@ export default function App() {
         const txId = `TRX-${timestamp}`;
         const sourceMoNumbers = [...new Set(selectedMaterials.map((m) => m.moNumber).filter(Boolean))];
         const sourceTmNumbers = [...new Set(selectedMaterials.map((m) => m.tmNumber).filter(Boolean))];
-        const primaryMaterial = selectedMaterials[0];
+        const primaryMaterial =
+          selectedMaterials.find((material) => material.isPrimaryMaterial) ||
+          selectedMaterials[0];
         const mainMoNumber = String(primaryMaterial?.moNumber || "").trim();
 
         if (!mainMoNumber) {
@@ -1853,6 +2070,8 @@ export default function App() {
 
         if (selections.length === 0) return alert("Isi qty untuk outbound!");
 
+        const expiredOutboundItems = [];
+
         for (const item of selections) {
           if (!item.localBatch || item.localBatch.skuId !== sku.id) {
             return alert(`Batch ${item.batchId} tidak valid untuk SKU yang dipilih.`);
@@ -1866,7 +2085,28 @@ export default function App() {
           ) {
             return alert(`Tanggal outbound tidak boleh lebih awal dari tanggal masuk batch ${item.batchId}.`);
           }
+
+          const expiryInfo = getBatchExpiryInfo(item.localBatch, new Date(date));
+          if (expiryInfo.isExpired) expiredOutboundItems.push(item);
         }
+
+        if (expiredOutboundItems.length > 0 && !isVerifiedSuperAdmin) {
+          return alert(
+            `Outbound diblokir karena ${expiredOutboundItems.length} batch sudah EXPIRED. Hubungi Super Admin.`
+          );
+        }
+        if (expiredOutboundItems.length > 0 && isVerifiedSuperAdmin) {
+          const allowExpiredOutbound = window.confirm(
+            `PERINGATAN: ${expiredOutboundItems.length} batch yang dipilih sudah EXPIRED.
+
+Lanjutkan sebagai override Super Admin?`
+          );
+          if (!allowExpiredOutbound) return;
+        }
+
+        const expiredOutboundIds = new Set(
+          expiredOutboundItems.map((item) => item.batchId)
+        );
 
         await runTransaction(db, async (transaction) => {
           // Semua pembacaan dilakukan lebih dahulu agar transaksi Firestore tetap valid.
@@ -1933,6 +2173,11 @@ export default function App() {
                 sourceTmNumbers: liveBatch.sourceTmNumbers || [],
                 tmNumber: isFinishedGoods ? outboundTm : (liveBatch.tmNumber || ""),
                 resultTmNumber: isFinishedGoods ? outboundTm : (liveBatch.resultTmNumber || ""),
+                expiryDate: liveBatch.expiryDate || "",
+                expiredOverride: expiredOutboundIds.has(item.batchId),
+                expiredOverrideBy: expiredOutboundIds.has(item.batchId)
+                  ? currentUser.username
+                  : "",
                 soNumber: formData.outSoNumber?.trim() || "",
                 customer: formData.outCustomer?.trim() || "",
                 ...auditMeta,
@@ -2625,59 +2870,151 @@ export default function App() {
     showNotif("Konfigurasi Sistem Diperbarui");
   };
 
+  const getOperationalArchiveSnapshot = async () => {
+    const collectionNames = [
+      "transactions",
+      "batches",
+      "tm_mo_bindings",
+      "batch_sequences",
+      "result_tms",
+    ];
+
+    const snapshots = {};
+    for (const name of collectionNames) {
+      const snap = await getDocs(
+        collection(db, "artifacts", appId, "public", "data", name)
+      );
+      snapshots[name] = snap.docs.map((item) => ({
+        _docId: item.id,
+        ...item.data(),
+      }));
+    }
+    return snapshots;
+  };
+
+  const downloadOperationalArchive = (snapshots) => {
+    const wb = XLSX.utils.book_new();
+    const sheetMap = [
+      ["transactions", "Transactions"],
+      ["batches", "Batches"],
+      ["tm_mo_bindings", "TM-MO"],
+      ["batch_sequences", "Batch Sequence"],
+      ["result_tms", "Legacy TM"],
+    ];
+
+    sheetMap.forEach(([key, sheetName]) => {
+      const rows = snapshots[key] || [];
+      const sheet = XLSX.utils.json_to_sheet(
+        rows.length > 0 ? rows : [{ Keterangan: "Tidak ada data" }]
+      );
+      XLSX.utils.book_append_sheet(wb, sheet, sheetName);
+    });
+
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .replace("T", "_")
+      .slice(0, 19);
+    XLSX.writeFile(wb, `Arsip_Data_Operasional_${stamp}.xlsx`);
+  };
+
+  const handleArchiveOperationalData = async () => {
+    if (!isVerifiedSuperAdmin) {
+      return alert("Akses arsip data hanya tersedia untuk Super Admin yang terverifikasi.");
+    }
+    if (!db) return alert("Database belum siap.");
+
+    try {
+      setResetHistoryLoading(true);
+      const snapshots = await getOperationalArchiveSnapshot();
+      downloadOperationalArchive(snapshots);
+      showNotif("Arsip data operasional berhasil dibuat");
+    } catch (error) {
+      console.error("Archive Operational Data Error:", error);
+      alert(`Gagal membuat arsip data: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
+    } finally {
+      setResetHistoryLoading(false);
+    }
+  };
+
   const handleResetTransactionHistory = async () => {
     if (!isVerifiedSuperAdmin) {
-      return alert("Akses reset riwayat hanya tersedia untuk Super Admin yang terverifikasi.");
+      return alert("Akses reset data uji hanya tersedia untuk Super Admin yang terverifikasi.");
     }
     if (!db) {
       return alert("Database belum siap. Silakan muat ulang aplikasi.");
     }
 
     const firstConfirm = window.confirm(
-      "PERINGATAN: Semua RIWAYAT TRANSAKSI akan dihapus permanen.\n\nStok, batch inventori, master SKU, pengguna, dan konfigurasi TIDAK akan dihapus.\n\nLanjutkan?"
+      "RESET DATA UJI akan menghapus SELURUH transaksi, stok/batch, mapping TM-MO, dan sequence batch.\n\nMaster SKU, Komposisi, Pengguna, dan Konfigurasi tetap dipertahankan.\n\nSebelum penghapusan, sistem akan mengunduh arsip Excel otomatis.\n\nLanjutkan?"
     );
     if (!firstConfirm) return;
 
     const verification = window.prompt(
-      'Ketik tepat "RESET RIWAYAT" untuk mengonfirmasi penghapusan seluruh riwayat transaksi.'
+      'Ketik tepat "RESET DATA UJI" untuk melanjutkan.'
     );
-    if (verification !== "RESET RIWAYAT") {
+    if (verification !== "RESET DATA UJI") {
       return alert("Konfirmasi tidak sesuai. Reset dibatalkan.");
     }
 
     try {
       setResetHistoryLoading(true);
+      const snapshots = await getOperationalArchiveSnapshot();
+      const totalDocs = Object.values(snapshots).reduce(
+        (sum, rows) => sum + rows.length,
+        0
+      );
 
-      const txCollection = collection(db, "artifacts", appId, "public", "data", "transactions");
-      const snapshot = await getDocs(txCollection);
-
-      if (snapshot.empty) {
-        alert("Riwayat transaksi sudah kosong.");
-        return;
+      if (totalDocs === 0) {
+        return alert("Data operasional sudah kosong.");
       }
 
-      const docsToDelete = snapshot.docs;
+      downloadOperationalArchive(snapshots);
+
+      const collectionNames = [
+        "transactions",
+        "batches",
+        "tm_mo_bindings",
+        "batch_sequences",
+        "result_tms",
+      ];
       const chunkSize = 450;
 
-      for (let i = 0; i < docsToDelete.length; i += chunkSize) {
-        const batch = writeBatch(db);
-        docsToDelete.slice(i, i + chunkSize).forEach((txDoc) => {
-          batch.delete(txDoc.ref);
-        });
-        await batch.commit();
+      for (const collectionName of collectionNames) {
+        const targetCollection = collection(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          collectionName
+        );
+        const snapshot = await getDocs(targetCollection);
+
+        for (let i = 0; i < snapshot.docs.length; i += chunkSize) {
+          const batch = writeBatch(db);
+          snapshot.docs.slice(i, i + chunkSize).forEach((item) => {
+            batch.delete(item.ref);
+          });
+          await batch.commit();
+        }
       }
 
-      showNotif(`${docsToDelete.length} riwayat transaksi berhasil dihapus`);
+      setFormData(initialFormData);
+      setOutboundSelections({});
+      setRebagMaterialSelections({});
+      showNotif("Data uji berhasil direset dan arsip sudah diunduh");
       alert(
-        `${docsToDelete.length} riwayat transaksi telah dihapus.\n\nStok dan batch inventori tetap dipertahankan.`
+        "Reset Data Uji selesai.\n\nTransaksi, stok/batch, mapping TM-MO, dan sequence batch sudah dikosongkan secara konsisten. Arsip Excel telah diunduh sebelum penghapusan."
       );
     } catch (error) {
-      console.error("Reset Transaction History Error:", error);
-      alert(`Gagal mereset riwayat transaksi: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
+      console.error("Reset Test Data Error:", error);
+      alert(`Gagal mereset data uji: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
     } finally {
       setResetHistoryLoading(false);
     }
   };
+
 
   if (dbError) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
