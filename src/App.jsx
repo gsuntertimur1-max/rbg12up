@@ -3599,6 +3599,216 @@ export default function App() {
             </div>
           )}
 
+          {/* REPORTS */}
+          {activeMenu === "reports" && (
+            <div className="space-y-6">
+              <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 border-b border-slate-200 pb-5">
+                <div>
+                  <div className="text-xs font-black uppercase tracking-[0.16em] text-red-500">Monitoring & Traceability</div>
+                  <h1 className="mt-1 text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Laporan Produksi Rebagging</h1>
+                  <p className="mt-2 text-sm text-slate-500">Rekap Pack, Kg, pemakaian bahan, material damage, dan penelusuran TM Hasil.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadProductionReport}
+                  className="inline-flex w-full lg:w-auto items-center justify-center gap-2 rounded-xl bg-green-600 px-5 py-3 text-sm font-black text-white shadow-md hover:bg-green-700"
+                >
+                  <Download size={18}/> Export Laporan .xlsx
+                </button>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+                  <div>
+                    <label className="mb-2 block text-xs font-black uppercase tracking-wider text-slate-500">Mulai</label>
+                    <input type="date" className="w-full rounded-lg border border-slate-300 p-2.5 outline-none focus:border-red-500" value={reportStartDate} onChange={e=>setReportStartDate(e.target.value)}/>
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-black uppercase tracking-wider text-slate-500">Sampai</label>
+                    <input type="date" className="w-full rounded-lg border border-slate-300 p-2.5 outline-none focus:border-red-500" value={reportEndDate} onChange={e=>setReportEndDate(e.target.value)}/>
+                  </div>
+                  <button type="button" onClick={()=>{setReportStartDate("");setReportEndDate("");}} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100">Reset Filter</button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+                {[
+                  ["Produksi",productionReportRows.length,"batch"],
+                  ["Output",productionReportSummary.outputPack,"Pack"],
+                  ["Berat Netto",productionReportSummary.outputKg,"Kg"],
+                  ["GOOD",productionReportSummary.goodPack,"Pack"],
+                  ["GOOD Netto",productionReportSummary.goodKg,"Kg"],
+                ].map(([label,value,unit])=>(
+                  <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">{label}</div>
+                    <div className="mt-2 text-xl font-black text-slate-900">{Number(value||0).toLocaleString('id-ID')}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-400">{unit}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-green-200 bg-green-50 p-4">
+                  <div className="text-xs font-black text-green-700">GOOD</div>
+                  <div className="mt-2 text-lg font-black text-green-900">{productionReportSummary.goodPack.toLocaleString('id-ID')} Pack</div>
+                  <div className="text-xs font-bold text-green-700">{productionReportSummary.goodKg.toLocaleString('id-ID')} Kg</div>
+                </div>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="text-xs font-black text-amber-700">PROCESS</div>
+                  <div className="mt-2 text-lg font-black text-amber-900">{productionReportSummary.processPack.toLocaleString('id-ID')} Pack</div>
+                  <div className="text-xs font-bold text-amber-700">{productionReportSummary.processKg.toLocaleString('id-ID')} Kg</div>
+                </div>
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <div className="text-xs font-black text-red-700">DAMAGE PRODUK JADI</div>
+                  <div className="mt-2 text-lg font-black text-red-900">{productionReportSummary.damagePack.toLocaleString('id-ID')} Pack</div>
+                  <div className="text-xs font-bold text-red-700">{productionReportSummary.damageKg.toLocaleString('id-ID')} Kg</div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div className="border-b border-slate-100 p-5">
+                  <h3 className="text-lg font-black text-slate-900">Pemakaian & Waste Bahan</h3>
+                  <p className="mt-1 text-xs text-slate-500">Damage tidak dijumlah lintas satuan; setiap SKU direkap pada satuannya sendiri.</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-sm">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="p-3 text-left">SKU</th>
+                        <th className="p-3 text-left">Nama Bahan</th>
+                        <th className="p-3 text-right">Dipakai Baik</th>
+                        <th className="p-3 text-right text-red-600">Rusak</th>
+                        <th className="p-3 text-right">Total Keluar</th>
+                        <th className="p-3 text-center">Satuan</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {materialUsageReportRows.map(row=>(
+                        <tr key={`${row.skuId}-${row.unit}`} className="hover:bg-slate-50">
+                          <td className="p-3 font-mono text-xs font-bold text-slate-600">{row.skuId}</td>
+                          <td className="p-3 font-bold text-slate-800">{row.skuName}</td>
+                          <td className="p-3 text-right font-bold text-slate-700">{row.usedQty.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-black text-red-600">{row.damageQty.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-black text-slate-900">{row.totalQty.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-center text-xs font-bold text-slate-500">{row.unit}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {materialUsageReportRows.length===0 && <div className="p-8 text-center text-sm italic text-slate-400">Belum ada pemakaian bahan pada periode ini.</div>}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-red-200 bg-white shadow-sm overflow-hidden">
+                <div className="border-b border-red-100 bg-red-50/60 p-5">
+                  <h3 className="text-lg font-black text-red-900">Ledger Material Damage</h3>
+                  <p className="mt-1 text-xs text-red-700">Hanya kerusakan yang terjadi saat proses Rebagging.</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px] text-sm">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="p-3 text-left">Tanggal</th>
+                        <th className="p-3 text-left">Bahan</th>
+                        <th className="p-3 text-left">MO / TM Bahan</th>
+                        <th className="p-3 text-left">TM Hasil</th>
+                        <th className="p-3 text-right">Rusak</th>
+                        <th className="p-3 text-left">Penyebab</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {materialDamageLedgerRows.map(t=>(
+                        <tr key={t.id} className="hover:bg-red-50/30">
+                          <td className="p-3 whitespace-nowrap text-slate-600">{new Date(t.date).toLocaleString('id-ID')}</td>
+                          <td className="p-3"><div className="font-bold text-slate-800">{t.skuName}</div><div className="font-mono text-[10px] text-slate-400">{t.skuId}</div></td>
+                          <td className="p-3 text-xs text-slate-600"><div>MO: {t.moNumber||'-'}</div><div>TM: {t.tmNumber||'-'}</div></td>
+                          <td className="p-3 font-mono text-xs font-bold text-green-700">{t.resultTmNumber||'-'}</td>
+                          <td className="p-3 text-right font-black text-red-600">{Number(t.damageQty??t.qtyChange??0).toLocaleString('id-ID')} {t.unit}</td>
+                          <td className="p-3 text-xs text-slate-600">{t.cause||'Kerusakan saat proses Rebagging'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {materialDamageLedgerRows.length===0 && <div className="p-8 text-center text-sm italic text-slate-400">Tidak ada material damage pada periode ini.</div>}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <Search size={20} className="mt-1 shrink-0 text-blue-600"/>
+                  <div className="flex-1">
+                    <h3 className="text-lg font-black text-slate-900">Traceability TM Hasil</h3>
+                    <p className="mt-1 text-xs text-slate-500">Telusuri bahan, MO/TM sumber, komposisi versi produksi, material damage, dan outbound.</p>
+                    <input
+                      type="text"
+                      className="mt-4 w-full rounded-xl border border-blue-200 bg-blue-50/40 p-3 font-mono font-bold text-blue-900 outline-none focus:border-blue-500"
+                      value={traceTmQuery}
+                      onChange={e=>setTraceTmQuery(e.target.value)}
+                      placeholder="Ketik TM Hasil..."
+                    />
+                  </div>
+                </div>
+
+                {traceTmQuery && (
+                  <div className="mt-5 space-y-4">
+                    {traceabilityResults.map(({production,outbound,materialDamage})=>(
+                      <div key={production.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                          <div>
+                            <div className="font-mono text-sm font-black text-green-700">{production.resultTmNumber}</div>
+                            <div className="mt-1 text-lg font-black text-slate-900">{production.skuName}</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {new Date(production.date).toLocaleString('id-ID')} · Komposisi v{production.recipeVersion||1}
+                            </div>
+                          </div>
+                          <div className="rounded-xl bg-white px-4 py-3 text-right shadow-sm">
+                            <div className="font-black text-slate-900">{Number(production.outputQty??production.processedQty??0).toLocaleString('id-ID')} Pack</div>
+                            <div className="mt-1 text-xs font-bold text-blue-600">{Number(production.netWeightKg||0).toLocaleString('id-ID')} Kg</div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                          <table className="w-full min-w-[780px] text-xs">
+                            <thead className="bg-slate-50 text-slate-500">
+                              <tr><th className="p-2 text-left">Bahan</th><th className="p-2 text-left">Batch</th><th className="p-2 text-left">MO</th><th className="p-2 text-left">TM Bahan</th><th className="p-2 text-right">Dipakai</th><th className="p-2 text-right">Rusak</th></tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {(production.materials||[]).map(material=>(
+                                <tr key={`${production.id}-${material.skuId}`}>
+                                  <td className="p-2"><div className="font-bold text-slate-800">{material.skuName}</div><div className="font-mono text-[10px] text-slate-400">{material.skuId}</div></td>
+                                  <td className="p-2 font-mono text-[10px] text-slate-500">{material.batchId}</td>
+                                  <td className="p-2">{material.moNumber||'-'}</td>
+                                  <td className="p-2">{material.tmNumber||'-'}</td>
+                                  <td className="p-2 text-right font-bold">{Number(material.usedQty??material.qty??0).toLocaleString('id-ID')} {material.unit}</td>
+                                  <td className="p-2 text-right font-black text-red-600">{Number(material.damageQty||0).toLocaleString('id-ID')} {material.unit}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="rounded-xl bg-white p-3">
+                            <div className="text-[10px] font-black uppercase text-slate-400">Material Damage</div>
+                            <div className="mt-1 text-sm font-black text-red-600">{materialDamage.length} catatan</div>
+                          </div>
+                          <div className="rounded-xl bg-white p-3">
+                            <div className="text-[10px] font-black uppercase text-slate-400">Outbound</div>
+                            <div className="mt-1 text-sm font-black text-orange-600">{outbound.length} transaksi</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {outbound.reduce((sum,t)=>sum+Number(t.qtyChange||0),0).toLocaleString('id-ID')} Pack · {outbound.reduce((sum,t)=>sum+Number(t.netWeightKg||0),0).toLocaleString('id-ID')} Kg
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {traceabilityResults.length===0 && <div className="rounded-xl bg-slate-50 p-5 text-center text-sm italic text-slate-400">TM Hasil tidak ditemukan.</div>}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* HISTORY */}
           {activeMenu === "history" && (
             <div className="space-y-6">
@@ -3832,7 +4042,9 @@ export default function App() {
                       <div>
                         <div className="text-xs font-black uppercase tracking-[0.14em] text-red-500">Master Produksi</div>
                         <h3 className="mt-1 text-xl font-black text-slate-900">
-                          {editingRecipeId ? "Edit Komposisi" : "Tambah Komposisi"}
+                          {editingRecipeId
+                            ? `Edit Komposisi · v${Number(rebagRecipes.find(r=>r.id===editingRecipeId)?.version || 1)} → v${Number(rebagRecipes.find(r=>r.id===editingRecipeId)?.version || 1)+1}`
+                            : "Tambah Komposisi · v1"}
                         </h3>
                         <p className="mt-1 text-xs leading-5 text-slate-500">
                           Operator akan membaca komposisi aktif ini secara otomatis pada proses Rebagging.
@@ -3901,9 +4113,35 @@ export default function App() {
                               <SearchableSelect
                                 options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
                                 value={item.skuId}
-                                onChange={v=>updateRecipeMaterialLine(item.rowId,'skuId',v)}
+                                onChange={v=>{
+                                  updateRecipeMaterialLine(item.rowId,'skuId',v);
+                                  const targetSku=skus.find(s=>s.id===recipeForm.targetSku);
+                                  const materialSku=skus.find(s=>s.id===v);
+                                  const suggestion=getSuggestedMaterialStandard(targetSku,materialSku);
+                                  if(suggestion){
+                                    updateRecipeMaterialLine(item.rowId,'calculationMode',suggestion.calculationMode);
+                                    updateRecipeMaterialLine(item.rowId,'outputPerUnit',String(suggestion.outputPerUnit));
+                                  }
+                                }}
                                 placeholder="Pilih SKU bahan..."
                               />
+                              {(()=>{
+                                const targetSku=skus.find(s=>s.id===recipeForm.targetSku);
+                                const materialSku=skus.find(s=>s.id===item.skuId);
+                                const suggestion=getSuggestedMaterialStandard(targetSku,materialSku);
+                                return suggestion ? (
+                                  <button
+                                    type="button"
+                                    onClick={()=>{
+                                      updateRecipeMaterialLine(item.rowId,'calculationMode',suggestion.calculationMode);
+                                      updateRecipeMaterialLine(item.rowId,'outputPerUnit',String(suggestion.outputPerUnit));
+                                    }}
+                                    className="mt-2 inline-flex rounded-lg border border-green-200 bg-green-50 px-2.5 py-1.5 text-[10px] font-black text-green-700 hover:bg-green-100"
+                                  >
+                                    Saran dari nama: {suggestion.label}
+                                  </button>
+                                ) : null;
+                              })()}
                             </div>
                             <label className="flex h-[46px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 cursor-pointer">
                               <input
@@ -3953,8 +4191,9 @@ export default function App() {
                                   required
                                 />
                                 <div className="mt-2 flex flex-wrap gap-1.5">
-                                  <button type="button" onClick={()=>updateRecipeMaterialLine(item.rowId,'outputPerUnit','24')} className="rounded-md bg-white border border-green-200 px-2 py-1 text-[10px] font-bold text-green-700">24 · Gula 1 kg</button>
-                                  <button type="button" onClick={()=>updateRecipeMaterialLine(item.rowId,'outputPerUnit','20')} className="rounded-md bg-white border border-green-200 px-2 py-1 text-[10px] font-bold text-green-700">20 · Fortivit 1 kg</button>
+                                  <button type="button" onClick={()=>updateRecipeMaterialLine(item.rowId,'outputPerUnit','1')} className="rounded-md bg-white border border-green-200 px-2 py-1 text-[10px] font-bold text-green-700">1 · Kemasan per Pack</button>
+                                  <button type="button" onClick={()=>updateRecipeMaterialLine(item.rowId,'outputPerUnit','24')} className="rounded-md bg-white border border-green-200 px-2 py-1 text-[10px] font-bold text-green-700">24 · Kardus Gula</button>
+                                  <button type="button" onClick={()=>updateRecipeMaterialLine(item.rowId,'outputPerUnit','20')} className="rounded-md bg-white border border-green-200 px-2 py-1 text-[10px] font-bold text-green-700">20 · Kardus Fortivit 1 kg</button>
                                 </div>
                               </div>
                             ) : (
@@ -4027,6 +4266,9 @@ export default function App() {
                                 <h4 className="text-lg font-black text-slate-900">{recipe.label}</h4>
                                 <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${recipe.active!==false?'bg-green-50 text-green-700':'bg-slate-100 text-slate-500'}`}>
                                   {recipe.active!==false?'AKTIF':'NONAKTIF'}
+                                </span>
+                                <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-black text-blue-700">
+                                  v{recipe.version || 1}
                                 </span>
                               </div>
                               <p className="mt-1 text-sm font-mono text-slate-500">
