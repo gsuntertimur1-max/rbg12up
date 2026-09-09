@@ -27,6 +27,40 @@ const DEFAULT_USERS = [
   { username: "operator", password: "123456", role: "Operator" },
 ];
 
+const REBAG_RECIPES = [
+  {
+    key: "FORTIVIT_1KG",
+    targetSku: "B0030038X",
+    label: "Fortivit 1 Kg",
+    materials: ["A0020003X", "A0210001X", "D0200129X", "D0200111X"],
+  },
+  {
+    key: "FORTIVIT_5KG",
+    targetSku: "B0030039X",
+    label: "Fortivit 5 Kg",
+    materials: ["A0020003X", "A0210001X", "D0200084X"],
+  },
+  {
+    key: "GULA",
+    matchName: "GULA",
+    label: "Rebag Gula",
+    materials: ["A0060004X", "D0200062X", "D0200130X"],
+  },
+];
+
+const getRebagRecipe = (targetSku) => {
+  if (!targetSku) return null;
+  return (
+    REBAG_RECIPES.find((recipe) => recipe.targetSku === targetSku.id) ||
+    REBAG_RECIPES.find(
+      (recipe) =>
+        recipe.matchName &&
+        String(targetSku.name || "").toUpperCase().includes(recipe.matchName)
+    ) ||
+    null
+  );
+};
+
 // --- FIREBASE SETUP ---
 const firebaseConfig = {
   apiKey: "AIzaSyC8ygXyWwjnbKMoYBO7CQP-EKcPmUbL6pg",
@@ -277,13 +311,21 @@ async function generateRebaggingBatchPdf(tx) {
   const finishedUnit = tx.finishedUnit || tx.unit || "Pack";
   const executor = tx.executor || "KOPEL JAYA";
   const supervisor = tx.supervisor || tx.operator || "";
-  const materials = [
-    ["Gula Curah", sourceQty ? sourceQty + " " + sourceUnit : "", executor, supervisor],
-    ["Plastik PP 1 Kg", finishedQty ? finishedQty + " " + finishedUnit : "", executor, supervisor],
-    ["Karton", "", "", ""],
-    ["Lakban", "", "", ""],
-    ["Tinta Inkjet Exp Date", "", "", ""],
-  ];
+  const materials =
+    Array.isArray(tx.materials) && tx.materials.length > 0
+      ? tx.materials.slice(0, 5).map((m) => [
+          `${m.skuId || ""} ${m.skuName || ""}`.trim(),
+          `${m.qty ?? ""} ${m.unit || ""}`.trim(),
+          executor,
+          supervisor,
+        ])
+      : [
+          ["Gula Curah", sourceQty ? sourceQty + " " + sourceUnit : "", executor, supervisor],
+          ["Plastik PP 1 Kg", finishedQty ? finishedQty + " " + finishedUnit : "", executor, supervisor],
+          ["Karton", "", "", ""],
+          ["Lakban", "", "", ""],
+          ["Tinta Inkjet Exp Date", "", "", ""],
+        ];
   materials.forEach((row, i) => {
     const y = 251.5 + i * 9;
     txt(row[0], 20, y);
@@ -400,17 +442,34 @@ async function generateRawMaterialStockCardPdf({ sku, batches, transactions }) {
     }));
 
   const rebagOut = transactions
-    .filter(
-      (t) =>
-        t.type === "REBAGGING" &&
-        (t.sourceSkuId === sku.id || matchingBatchIds.has(t.sourceBatchId))
-    )
-    .map((t) => ({
-      kind: "OUT",
-      date: t.date,
-      qty: Number(t.sourceQty ?? t.qtyChange) || 0,
-      stack: t.sourceStack || "",
-    }));
+    .filter((t) => t.type === "REBAGGING")
+    .flatMap((t) => {
+      if (Array.isArray(t.materials) && t.materials.length > 0) {
+        return t.materials
+          .filter(
+            (m) =>
+              m.skuId === sku.id ||
+              matchingBatchIds.has(m.batchId)
+          )
+          .map((m) => ({
+            kind: "OUT",
+            date: t.date,
+            qty: Number(m.qty) || 0,
+            stack: m.sourceStack || "",
+          }));
+      }
+
+      if (t.sourceSkuId === sku.id || matchingBatchIds.has(t.sourceBatchId)) {
+        return [{
+          kind: "OUT",
+          date: t.date,
+          qty: Number(t.sourceQty ?? t.qtyChange) || 0,
+          stack: t.sourceStack || "",
+        }];
+      }
+
+      return [];
+    });
 
   const events = [...inbound, ...rebagOut].sort(
     (a, b) => new Date(a.date) - new Date(b.date)
@@ -749,14 +808,16 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const initialFormData = {
-    inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inSourceWarehouse: "",
+    inSkuId: "", inQty: "", inMoNumber: "", inTmNumber: "", inResultTmNumber: "", inSourceWarehouse: "",
     rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
     rebagGoodQty: "", rebagProcessQty: "0", rebagDamageQty: "0",
-    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(), outSkuId: "", outSoNumber: "", outCustomer: "",
+    rebagMoNumber: "", rebagExpiryDate: getDefaultExpiryDate(),
+    outSkuId: "", outMoNumber: "", outTmNumber: "", outSoNumber: "", outCustomer: "",
     useBackdate: false, backdateDateTime: ""
   };
   const [formData, setFormData] = useState(initialFormData);
   const [outboundSelections, setOutboundSelections] = useState({});
+  const [rebagMaterialSelections, setRebagMaterialSelections] = useState({});
   const [processResolution, setProcessResolution] = useState({
     batchId: "",
     qty: "",
@@ -876,6 +937,126 @@ export default function App() {
     )
   );
 
+  const selectedRebagTargetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
+  const activeRebagRecipe = getRebagRecipe(selectedRebagTargetSku);
+
+  const getResultTmForMo = (moNumber) => {
+    if (!moNumber) return "";
+    const values = inventoryBatches
+      .filter((b) => b.moNumber === moNumber && b.resultTmNumber)
+      .map((b) => String(b.resultTmNumber).trim())
+      .filter(Boolean);
+    return [...new Set(values)][0] || "";
+  };
+
+  const rebagAvailableMos = useMemo(() => {
+    if (activeRebagRecipe) {
+      const moSets = activeRebagRecipe.materials.map((skuId) =>
+        new Set(
+          inventoryBatches
+            .filter(
+              (b) =>
+                b.skuId === skuId &&
+                Number(b.currentQty || 0) > 0 &&
+                b.moNumber
+            )
+            .map((b) => b.moNumber)
+        )
+      );
+      if (moSets.length === 0) return [];
+      return [...moSets[0]]
+        .filter((mo) => moSets.every((set) => set.has(mo)))
+        .sort();
+    }
+
+    if (formData.bulkSkuId) {
+      return [
+        ...new Set(
+          inventoryBatches
+            .filter(
+              (b) =>
+                b.skuId === formData.bulkSkuId &&
+                Number(b.currentQty || 0) > 0 &&
+                b.moNumber
+            )
+            .map((b) => b.moNumber)
+        ),
+      ].sort();
+    }
+
+    return [];
+  }, [activeRebagRecipe, formData.bulkSkuId, inventoryBatches]);
+
+  const outboundSelectedSku = skus.find((s) => s.id === formData.outSkuId);
+  const outboundIsFinishedGoods = outboundSelectedSku?.type === "rebagged";
+  const outboundAvailableMos = useMemo(() => {
+    if (!formData.outSkuId) return [];
+    return [
+      ...new Set(
+        inventoryBatches
+          .filter(
+            (b) =>
+              b.skuId === formData.outSkuId &&
+              Number(b.currentQty || 0) > 0 &&
+              b.moNumber
+          )
+          .map((b) => b.moNumber)
+      ),
+    ].sort();
+  }, [formData.outSkuId, inventoryBatches]);
+
+  const handleInboundMoChange = (value) => {
+    const knownTmResult = getResultTmForMo(value);
+    setFormData((prev) => ({
+      ...prev,
+      inMoNumber: value,
+      inResultTmNumber: knownTmResult || prev.inResultTmNumber,
+    }));
+  };
+
+  const handleRebagTargetChange = (value) => {
+    setFormData((prev) => ({
+      ...prev,
+      rebagTargetSkuId: value,
+      rebagMoNumber: "",
+      bulkSkuId: "",
+      bulkBatchId: "",
+    }));
+    setRebagMaterialSelections({});
+  };
+
+  const handleRebagMoChange = (value) => {
+    setFormData((prev) => ({ ...prev, rebagMoNumber: value, bulkBatchId: "" }));
+    setRebagMaterialSelections({});
+  };
+
+  const handleOutboundSkuChange = (value) => {
+    setFormData((prev) => ({
+      ...prev,
+      outSkuId: value,
+      outMoNumber: "",
+      outTmNumber: "",
+    }));
+    setOutboundSelections({});
+  };
+
+  const handleOutboundMoChange = (value) => {
+    const batchTm =
+      inventoryBatches.find(
+        (b) =>
+          b.skuId === formData.outSkuId &&
+          b.moNumber === value &&
+          b.resultTmNumber
+      )?.resultTmNumber || getResultTmForMo(value);
+
+    setFormData((prev) => ({
+      ...prev,
+      outMoNumber: value,
+      outTmNumber: batchTm || "",
+    }));
+    setOutboundSelections({});
+  };
+
   const handleBackdateDateTimeChange = (value) => {
     setFormData((prev) => {
       const next = { ...prev, backdateDateTime: value };
@@ -957,6 +1138,17 @@ export default function App() {
         if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas barang masuk harus lebih dari 0.");
         if (!formData.inSourceWarehouse?.trim()) return alert("Gudang asal wajib diisi.");
 
+        const inboundMo = formData.inMoNumber?.trim() || "";
+        const inboundTm = formData.inTmNumber?.trim() || "";
+        const inboundResultTm = formData.inResultTmNumber?.trim() || "";
+        const existingResultTm = inboundMo ? getResultTmForMo(inboundMo) : "";
+
+        if (existingResultTm && inboundResultTm && existingResultTm !== inboundResultTm) {
+          return alert(
+            `TM Hasil untuk MO ${inboundMo} sebelumnya sudah tercatat sebagai ${existingResultTm}. Gunakan TM Hasil yang sama.`
+          );
+        }
+
         const batchId = `INB-${timestamp}`;
         const txId = `TRX-${timestamp}`;
         const batchData = {
@@ -965,8 +1157,9 @@ export default function App() {
           initialQty: qty,
           currentQty: qty,
           sourceWarehouse: formData.inSourceWarehouse.trim(),
-          moNumber: formData.inMoNumber?.trim() || "",
-          tmNumber: formData.inTmNumber?.trim() || "",
+          moNumber: inboundMo,
+          tmNumber: inboundTm,
+          resultTmNumber: inboundResultTm || existingResultTm,
           date,
           ...auditMeta,
         };
@@ -980,8 +1173,9 @@ export default function App() {
           unit: sku.unit,
           operator: currentUser.username,
           sourceWarehouse: formData.inSourceWarehouse.trim(),
-          moNumber: formData.inMoNumber?.trim() || "",
-          tmNumber: formData.inTmNumber?.trim() || "",
+          moNumber: inboundMo,
+          tmNumber: inboundTm,
+          resultTmNumber: inboundResultTm || existingResultTm,
           batchId,
           ...auditMeta,
         };
@@ -997,19 +1191,16 @@ export default function App() {
           );
         });
       } else if (activeOpTab === "rebagging") {
-        const selectedBatch = inventoryBatches.find(
-          (b) => b.batchId === formData.bulkBatchId
-        );
         const targetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
-        const sourceSku = skus.find((s) => s.id === selectedBatch?.skuId);
         const qty = Number(formData.qtyToProcess);
         const goodQty = Number(formData.rebagGoodQty || 0);
         const processQty = Number(formData.rebagProcessQty || 0);
         const damageQty = Number(formData.rebagDamageQty || 0);
         const totalResultQty = goodQty + processQty + damageQty;
+        const moNumber = formData.rebagMoNumber?.trim() || "";
 
-        if (!selectedBatch) return alert("Pilih batch bahan baku yang valid.");
         if (!targetSku) return alert("Pilih SKU hasil rebagging.");
+        if (!moNumber) return alert("Pilih No. MO proses rebagging.");
         if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas proses harus lebih dari 0.");
         if (
           ![goodQty, processQty, damageQty].every((value) => Number.isFinite(value) && value >= 0)
@@ -1021,62 +1212,175 @@ export default function App() {
             `Total hasil tidak sesuai. GOOD + PROCESS + DAMAGE harus sama dengan Qty Diproses (${qty}). Saat ini total hasil: ${totalResultQty}.`
           );
         }
-        if (!formData.rebagMoNumber?.trim()) return alert("No. MO wajib diisi untuk dokumen rebagging.");
         if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
         if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
-        if (
-          selectedBatch.date &&
-          new Date(date).getTime() < new Date(selectedBatch.date).getTime()
-        ) {
-          return alert("Tanggal rebagging tidak boleh lebih awal dari tanggal batch bahan baku masuk.");
+
+        const recipe = getRebagRecipe(targetSku);
+        let selectedMaterials = [];
+
+        if (recipe) {
+          for (const materialSkuId of recipe.materials) {
+            const selection = rebagMaterialSelections[materialSkuId] || {};
+            const sourceBatch = inventoryBatches.find(
+              (b) => b.batchId === selection.batchId
+            );
+            const sourceSku = skus.find((s) => s.id === materialSkuId);
+            const materialQty = Number(selection.qty);
+
+            if (!sourceBatch) {
+              return alert(`Pilih batch/TM untuk bahan ${materialSkuId}.`);
+            }
+            if (sourceBatch.moNumber !== moNumber) {
+              return alert(`Batch bahan ${materialSkuId} tidak sesuai dengan MO ${moNumber}.`);
+            }
+            if (!sourceBatch.tmNumber) {
+              return alert(`Batch bahan ${materialSkuId} belum memiliki No. TM.`);
+            }
+            if (!Number.isFinite(materialQty) || materialQty <= 0) {
+              return alert(`Isi jumlah pemakaian bahan ${materialSkuId} lebih dari 0.`);
+            }
+            if (
+              sourceBatch.date &&
+              new Date(date).getTime() < new Date(sourceBatch.date).getTime()
+            ) {
+              return alert(
+                `Tanggal rebagging tidak boleh lebih awal dari tanggal masuk bahan ${materialSkuId}.`
+              );
+            }
+
+            selectedMaterials.push({
+              skuId: materialSkuId,
+              skuName: sourceSku?.name || materialSkuId,
+              batchId: sourceBatch.batchId,
+              moNumber: sourceBatch.moNumber || "",
+              tmNumber: sourceBatch.tmNumber || "",
+              qty: materialQty,
+              unit: sourceSku?.unit || "",
+              sourceWarehouse: sourceBatch.sourceWarehouse || "",
+            });
+          }
+
+          const tmValues = selectedMaterials.map((m) => m.tmNumber).filter(Boolean);
+          if (new Set(tmValues).size !== tmValues.length) {
+            return alert("No. TM setiap bahan pada komposisi ini harus berbeda.");
+          }
+        } else {
+          const selectedBatch = inventoryBatches.find(
+            (b) => b.batchId === formData.bulkBatchId
+          );
+          const sourceSku = skus.find((s) => s.id === selectedBatch?.skuId);
+
+          if (!selectedBatch) return alert("Pilih batch bahan baku yang valid.");
+          if (selectedBatch.moNumber && selectedBatch.moNumber !== moNumber) {
+            return alert("Batch bahan baku tidak sesuai dengan No. MO yang dipilih.");
+          }
+          if (
+            selectedBatch.date &&
+            new Date(date).getTime() < new Date(selectedBatch.date).getTime()
+          ) {
+            return alert("Tanggal rebagging tidak boleh lebih awal dari tanggal batch bahan baku masuk.");
+          }
+
+          selectedMaterials = [
+            {
+              skuId: sourceSku?.id || selectedBatch.skuId || "",
+              skuName: sourceSku?.name || selectedBatch.skuId || "Bahan Baku",
+              batchId: selectedBatch.batchId,
+              moNumber: selectedBatch.moNumber || moNumber,
+              tmNumber: selectedBatch.tmNumber || "",
+              qty,
+              unit: sourceSku?.unit || "",
+              sourceWarehouse: selectedBatch.sourceWarehouse || "",
+            },
+          ];
         }
 
-        const sourceBatchRef = doc(
-          db,
-          "artifacts",
-          appId,
-          "public",
-          "data",
-          "batches",
-          selectedBatch.batchId
-        );
+        const resultTmNumber =
+          getResultTmForMo(moNumber) ||
+          selectedMaterials
+            .map((m) =>
+              inventoryBatches.find((b) => b.batchId === m.batchId)?.resultTmNumber
+            )
+            .find(Boolean) ||
+          "";
+
+        if (!resultTmNumber) {
+          return alert(
+            `TM Hasil untuk MO ${moNumber} belum tercatat. Input TM Hasil terlebih dahulu pada proses Inbound salah satu bahan dengan MO tersebut.`
+          );
+        }
+
         const newBatchId = `RBG-${timestamp}`;
         const txId = `TRX-${timestamp}`;
 
         await runTransaction(db, async (transaction) => {
-          const sourceSnap = await transaction.get(sourceBatchRef);
-          if (!sourceSnap.exists()) throw new Error("Batch bahan baku tidak ditemukan.");
+          const materialRefs = selectedMaterials.map((material) =>
+            doc(db, "artifacts", appId, "public", "data", "batches", material.batchId)
+          );
+          const materialSnaps = await Promise.all(
+            materialRefs.map((ref) => transaction.get(ref))
+          );
 
-          const liveBatch = sourceSnap.data();
-          const liveQty = Number(liveBatch.currentQty) || 0;
-          if (qty > liveQty) {
-            throw new Error(`Qty melebihi stok terbaru. Stok tersedia: ${liveQty}`);
-          }
+          materialSnaps.forEach((snap, index) => {
+            if (!snap.exists()) {
+              throw new Error(`Batch bahan ${selectedMaterials[index].batchId} tidak ditemukan.`);
+            }
+            const liveBatch = snap.data();
+            const liveQty = Number(liveBatch.currentQty) || 0;
+            const requestedQty = Number(selectedMaterials[index].qty) || 0;
 
-          transaction.update(sourceBatchRef, { currentQty: liveQty - qty });
+            if (liveBatch.moNumber && liveBatch.moNumber !== moNumber) {
+              throw new Error(
+                `MO batch bahan ${selectedMaterials[index].skuId} berubah dan tidak lagi sesuai.`
+              );
+            }
+            if (requestedQty > liveQty) {
+              throw new Error(
+                `Pemakaian ${selectedMaterials[index].skuId} melebihi stok terbaru (${liveQty}).`
+              );
+            }
+          });
+
+          materialSnaps.forEach((snap, index) => {
+            const liveBatch = snap.data();
+            const liveQty = Number(liveBatch.currentQty) || 0;
+            transaction.update(materialRefs[index], {
+              currentQty: liveQty - Number(selectedMaterials[index].qty),
+            });
+          });
+
+          const primaryMaterial = selectedMaterials[0];
+          const sourceWarehouses = [
+            ...new Set(selectedMaterials.map((m) => m.sourceWarehouse).filter(Boolean)),
+          ].join(", ");
+
+          const finishedBatchData = {
+            batchId: newBatchId,
+            skuId: targetSku.id,
+            initialQty: qty,
+            currentQty: goodQty,
+            goodQty,
+            processQty,
+            damageQty,
+            totalProducedQty: qty,
+            sourceWarehouse: sourceWarehouses,
+            targetStack: formData.rebagTargetStack,
+            sourceBatchId: primaryMaterial?.batchId || "",
+            sourceBatchIds: selectedMaterials.map((m) => m.batchId),
+            materials: selectedMaterials,
+            moNumber,
+            resultTmNumber,
+            expiryDate: formData.rebagExpiryDate,
+            productionDate: date,
+            executor: "KOPEL JAYA",
+            supervisor: currentUser.username,
+            date,
+            ...auditMeta,
+          };
 
           transaction.set(
             doc(db, "artifacts", appId, "public", "data", "batches", newBatchId),
-            {
-              batchId: newBatchId,
-              skuId: targetSku.id,
-              initialQty: qty,
-              currentQty: goodQty,
-              goodQty,
-              processQty,
-              damageQty,
-              totalProducedQty: qty,
-              sourceWarehouse: liveBatch.sourceWarehouse || selectedBatch.sourceWarehouse || "",
-              targetStack: formData.rebagTargetStack,
-              sourceBatchId: selectedBatch.batchId,
-              moNumber: formData.rebagMoNumber.trim(),
-              expiryDate: formData.rebagExpiryDate,
-              productionDate: date,
-              executor: "KOPEL JAYA",
-              supervisor: currentUser.username,
-              date,
-              ...auditMeta,
-            }
+            finishedBatchData
           );
 
           transaction.set(
@@ -1098,17 +1402,21 @@ export default function App() {
               executor: "KOPEL JAYA",
               productionDate: date,
               expiryDate: formData.rebagExpiryDate,
-              moNumber: formData.rebagMoNumber.trim(),
+              moNumber,
+              resultTmNumber,
               targetStack: formData.rebagTargetStack,
-              sourceWarehouse: liveBatch.sourceWarehouse || selectedBatch.sourceWarehouse || "",
-              sourceBatchId: selectedBatch.batchId,
-              sourceSkuId: sourceSku?.id || selectedBatch.skuId || "",
-              sourceSkuName: sourceSku?.name || "Gula Curah",
-              sourceQty: qty,
-              sourceUnit: sourceSku?.unit || "KG",
+              sourceWarehouse: sourceWarehouses,
+              sourceBatchId: primaryMaterial?.batchId || "",
+              sourceBatchIds: selectedMaterials.map((m) => m.batchId),
+              sourceSkuId: primaryMaterial?.skuId || "",
+              sourceSkuName: primaryMaterial?.skuName || "",
+              sourceQty: primaryMaterial?.qty || 0,
+              sourceUnit: primaryMaterial?.unit || "",
+              materials: selectedMaterials,
               finishedQty: goodQty,
               finishedUnit: targetSku.unit,
               batchId: newBatchId,
+              recipeKey: recipe?.key || "MANUAL",
               ...auditMeta,
             }
           );
@@ -1116,6 +1424,17 @@ export default function App() {
       } else if (activeOpTab === "outbound") {
         const sku = skus.find((s) => s.id === formData.outSkuId);
         if (!sku) return alert("Pilih barang yang akan dikeluarkan.");
+
+        const isFinishedGoods = sku.type === "rebagged";
+        const outboundMo = formData.outMoNumber?.trim() || "";
+        const outboundTm = formData.outTmNumber?.trim() || "";
+
+        if (isFinishedGoods && !outboundMo) {
+          return alert("Pilih No. MO untuk outbound produk jadi.");
+        }
+        if (isFinishedGoods && !outboundTm) {
+          return alert("TM Hasil untuk MO yang dipilih belum tersedia.");
+        }
 
         const selections = Object.entries(outboundSelections)
           .map(([batchId, qtyValue]) => ({
@@ -1130,6 +1449,9 @@ export default function App() {
         for (const item of selections) {
           if (!item.localBatch || item.localBatch.skuId !== sku.id) {
             return alert(`Batch ${item.batchId} tidak valid untuk SKU yang dipilih.`);
+          }
+          if (isFinishedGoods && item.localBatch.moNumber !== outboundMo) {
+            return alert(`Batch ${item.batchId} tidak sesuai dengan MO ${outboundMo}.`);
           }
           if (
             item.localBatch.date &&
@@ -1180,6 +1502,9 @@ export default function App() {
                 operator: currentUser.username,
                 batchId: item.batchId,
                 sourceWarehouse: liveBatch.sourceWarehouse || "",
+                moNumber: isFinishedGoods ? outboundMo : (liveBatch.moNumber || ""),
+                tmNumber: isFinishedGoods ? outboundTm : (liveBatch.tmNumber || ""),
+                resultTmNumber: isFinishedGoods ? outboundTm : (liveBatch.resultTmNumber || ""),
                 soNumber: formData.outSoNumber?.trim() || "",
                 customer: formData.outCustomer?.trim() || "",
                 ...auditMeta,
@@ -1192,6 +1517,7 @@ export default function App() {
       showNotif("Transaksi Berhasil Disimpan");
       setFormData(initialFormData);
       setOutboundSelections({});
+      setRebagMaterialSelections({});
     } catch (error) {
       console.error("Transaction Error:", error);
       alert(`Transaksi gagal disimpan: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
@@ -1364,6 +1690,7 @@ export default function App() {
       SKU: t.skuName,
       "No. MO": t.moNumber || "",
       "No. TM": t.tmNumber || "",
+      "TM Hasil": t.resultTmNumber || "",
       Qty: t.qtyChange,
       Operator: t.operator
     })));
@@ -1917,38 +2244,180 @@ export default function App() {
                       <>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} placeholder="Contoh: 5000" required/></div>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. MO <span className="font-normal text-slate-400">(untuk kartu persediaan)</span></label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inMoNumber} onChange={e=>setFormData({...formData, inMoNumber:e.target.value})} placeholder="Contoh: MO/4381/05/2026/09001" /></div>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. TM</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inTmNumber} onChange={e=>setFormData({...formData, inTmNumber:e.target.value})} placeholder="Contoh: TM/4381/05/2026/09001" /></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. MO <span className="font-normal text-slate-400">(pengikat proses produksi)</span></label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inMoNumber} onChange={e=>handleInboundMoChange(e.target.value)} placeholder="Contoh: MO/4381/05/2026/09001" /></div>
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. TM Bahan</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inTmNumber} onChange={e=>setFormData({...formData, inTmNumber:e.target.value})} placeholder="TM khusus bahan/SKU ini" /></div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">TM Hasil <span className="font-normal text-slate-400">(untuk produk jadi/outbound)</span></label>
+                          <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inResultTmNumber} onChange={e=>setFormData({...formData, inResultTmNumber:e.target.value})} placeholder="TM hasil untuk MO yang sama" />
+                          <p className="text-xs text-slate-500 mt-1.5">Untuk bahan dengan MO yang sama, TM bahan boleh berbeda tetapi TM Hasil harus konsisten.</p>
+                        </div>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
                       </>
                     )}
                     {activeOpTab === 'rebagging' && (
                       <>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Asal (Sumber)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.bulkSkuId} onChange={v=>setFormData({...formData, bulkSkuId:v})} placeholder="Pilih Bahan Baku..." /></div>
-                        {formData.bulkSkuId && <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch (Berdasarkan Gudang Asal)</label><SearchableSelect options={inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && b.currentQty>0).map(b=>({value:b.batchId, label:`${b.sourceWarehouse} (Sisa Stok: ${b.currentQty})`}))} value={formData.bulkBatchId} onChange={v=>setFormData({...formData, bulkBatchId:v})} placeholder="Pilih Batch yang akan direbagging..." /></div>}
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas yang Diproses</label><input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Target Produk Jadi</label>
+                          <SearchableSelect
+                            options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))}
+                            value={formData.rebagTargetSkuId}
+                            onChange={handleRebagTargetChange}
+                            placeholder="Pilih SKU Hasil Rebagging..."
+                          />
+                        </div>
+
+                        {formData.rebagTargetSkuId && (
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Komposisi Bahan</div>
+                            {activeRebagRecipe ? (
+                              <div className="mt-2">
+                                <div className="font-black text-slate-800">{activeRebagRecipe.label}</div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {activeRebagRecipe.materials.map((skuId) => (
+                                    <span key={skuId} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">
+                                      {skuId}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="mt-2 text-sm text-slate-600">Belum ada preset komposisi. Gunakan mode bahan tunggal/manual.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {!activeRebagRecipe && (
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Utama</label>
+                            <SearchableSelect
+                              options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))}
+                              value={formData.bulkSkuId}
+                              onChange={v=>{
+                                setFormData({...formData, bulkSkuId:v, bulkBatchId:"", rebagMoNumber:""});
+                                setRebagMaterialSelections({});
+                              }}
+                              placeholder="Pilih Bahan Baku..."
+                            />
+                          </div>
+                        )}
+
+                        {(activeRebagRecipe || formData.bulkSkuId) && (
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">No. MO Produksi</label>
+                            <select
+                              className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white"
+                              value={formData.rebagMoNumber}
+                              onChange={e=>handleRebagMoChange(e.target.value)}
+                              required
+                            >
+                              <option value="">-- Pilih MO yang stok bahannya lengkap --</option>
+                              {rebagAvailableMos.map((mo)=><option key={mo} value={mo}>{mo}</option>)}
+                            </select>
+                            {rebagAvailableMos.length === 0 && (
+                              <p className="text-xs text-red-500 mt-1.5">Belum ada MO dengan stok bahan yang memenuhi komposisi.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {activeRebagRecipe && formData.rebagMoNumber && (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-black text-slate-800">Bahan yang Digunakan</h4>
+                              <span className="text-xs font-bold text-red-600">MO sama · TM tiap bahan berbeda</span>
+                            </div>
+                            {activeRebagRecipe.materials.map((materialSkuId) => {
+                              const materialSku = skus.find(s=>s.id===materialSkuId);
+                              const selection = rebagMaterialSelections[materialSkuId] || {};
+                              const batchOptions = inventoryBatches.filter(
+                                b => b.skuId === materialSkuId &&
+                                     b.moNumber === formData.rebagMoNumber &&
+                                     Number(b.currentQty || 0) > 0
+                              );
+                              const selectedBatch = batchOptions.find(b=>b.batchId===selection.batchId);
+                              return (
+                                <div key={materialSkuId} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                                  <div className="mb-3">
+                                    <div className="font-mono text-xs font-black text-red-600">{materialSkuId}</div>
+                                    <div className="font-bold text-slate-800">{materialSku?.name || "SKU belum ada di master"}</div>
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-[1.4fr_0.6fr] gap-3">
+                                    <select
+                                      className="w-full p-3 border border-slate-300 rounded-lg bg-white outline-none focus:border-red-500 text-sm"
+                                      value={selection.batchId || ""}
+                                      onChange={e=>setRebagMaterialSelections(prev=>({
+                                        ...prev,
+                                        [materialSkuId]: {...(prev[materialSkuId]||{}), batchId:e.target.value}
+                                      }))}
+                                      required
+                                    >
+                                      <option value="">-- Pilih Batch / TM --</option>
+                                      {batchOptions.map(b=>(
+                                        <option key={b.batchId} value={b.batchId}>
+                                          TM: {b.tmNumber || "-"} · Stok: {b.currentQty} · {b.sourceWarehouse || "-"}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max={selectedBatch?.currentQty || undefined}
+                                      className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 font-bold"
+                                      value={selection.qty || ""}
+                                      onChange={e=>setRebagMaterialSelections(prev=>({
+                                        ...prev,
+                                        [materialSkuId]: {...(prev[materialSkuId]||{}), qty:e.target.value}
+                                      }))}
+                                      placeholder="Qty pakai"
+                                      required
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {!activeRebagRecipe && formData.bulkSkuId && formData.rebagMoNumber && (
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch / TM Bahan Baku</label>
+                            <SearchableSelect
+                              options={inventoryBatches
+                                .filter(b=>b.skuId===formData.bulkSkuId && b.moNumber===formData.rebagMoNumber && b.currentQty>0)
+                                .map(b=>({value:b.batchId, label:`TM: ${b.tmNumber || '-'} · ${b.sourceWarehouse} · Stok: ${b.currentQty}`}))}
+                              value={formData.bulkBatchId}
+                              onChange={v=>setFormData({...formData, bulkBatchId:v})}
+                              placeholder="Pilih Batch..."
+                            />
+                          </div>
+                        )}
+
+                        {formData.rebagMoNumber && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                              <div className="text-xs font-bold uppercase tracking-wider text-blue-500">MO Produksi</div>
+                              <div className="mt-1 font-black text-blue-900 break-all">{formData.rebagMoNumber}</div>
+                            </div>
+                            <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+                              <div className="text-xs font-bold uppercase tracking-wider text-green-600">TM Hasil</div>
+                              <div className="mt-1 font-black text-green-900 break-all">{getResultTmForMo(formData.rebagMoNumber) || "Belum tercatat"}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas Hasil yang Diproses</label><input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
 
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
                           <div className="flex items-start justify-between gap-3 mb-4">
                             <div>
                               <h4 className="font-black text-slate-800">Hasil Pemeriksaan Rebagging</h4>
-                              <p className="text-xs text-slate-500 mt-1">GOOD dapat langsung menjadi stok siap outbound. PROCESS harus ditindaklanjuti. DAMAGE tidak masuk stok normal.</p>
+                              <p className="text-xs text-slate-500 mt-1">GOOD siap outbound, PROCESS menunggu rework, DAMAGE dipisahkan.</p>
                             </div>
                             <CheckCircle size={20} className="text-green-600 shrink-0"/>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <div>
-                              <label className="block text-xs font-black text-green-700 mb-2">GOOD</label>
-                              <input type="number" min="0" className="w-full p-3 border border-green-200 bg-white rounded-lg outline-none focus:border-green-500 font-bold text-green-700" value={formData.rebagGoodQty} onChange={e=>setFormData({...formData, rebagGoodQty:e.target.value})} placeholder="0" required />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-black text-amber-700 mb-2">PROCESS / REWORK</label>
-                              <input type="number" min="0" className="w-full p-3 border border-amber-200 bg-white rounded-lg outline-none focus:border-amber-500 font-bold text-amber-700" value={formData.rebagProcessQty} onChange={e=>setFormData({...formData, rebagProcessQty:e.target.value})} placeholder="0" required />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-black text-red-700 mb-2">DAMAGE</label>
-                              <input type="number" min="0" className="w-full p-3 border border-red-200 bg-white rounded-lg outline-none focus:border-red-500 font-bold text-red-700" value={formData.rebagDamageQty} onChange={e=>setFormData({...formData, rebagDamageQty:e.target.value})} placeholder="0" required />
-                            </div>
+                            <div><label className="block text-xs font-black text-green-700 mb-2">GOOD</label><input type="number" min="0" className="w-full p-3 border border-green-200 bg-white rounded-lg outline-none focus:border-green-500 font-bold text-green-700" value={formData.rebagGoodQty} onChange={e=>setFormData({...formData, rebagGoodQty:e.target.value})} placeholder="0" required /></div>
+                            <div><label className="block text-xs font-black text-amber-700 mb-2">PROCESS / REWORK</label><input type="number" min="0" className="w-full p-3 border border-amber-200 bg-white rounded-lg outline-none focus:border-amber-500 font-bold text-amber-700" value={formData.rebagProcessQty} onChange={e=>setFormData({...formData, rebagProcessQty:e.target.value})} placeholder="0" required /></div>
+                            <div><label className="block text-xs font-black text-red-700 mb-2">DAMAGE</label><input type="number" min="0" className="w-full p-3 border border-red-200 bg-white rounded-lg outline-none focus:border-red-500 font-bold text-red-700" value={formData.rebagDamageQty} onChange={e=>setFormData({...formData, rebagDamageQty:e.target.value})} placeholder="0" required /></div>
                           </div>
                           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white border border-slate-200 px-4 py-3 text-xs">
                             <span className="font-bold text-slate-500">Total hasil</span>
@@ -1958,18 +2427,11 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-bold text-slate-700 mb-2">No. MO</label>
-                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagMoNumber} onChange={e=>setFormData({...formData, rebagMoNumber:e.target.value})} placeholder="Contoh: 4381.05.2026.09001" required />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-bold text-slate-700 mb-2">Tanggal Kadaluwarsa</label>
-                            <input type="date" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagExpiryDate} onChange={e=>setFormData({...formData, rebagExpiryDate:e.target.value})} required />
-                          </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Tanggal Kadaluwarsa</label>
+                          <input type="date" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagExpiryDate} onChange={e=>setFormData({...formData, rebagExpiryDate:e.target.value})} required />
                         </div>
-                        <p className="text-xs text-slate-500 -mt-2">Tanggal produksi dan No. Batch dibuat otomatis saat transaksi disimpan. Tanggal kedaluwarsa otomatis diisi +1 tahun dan tetap dapat diubah.</p>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Target Barang Jadi (Kemasan)</label><SearchableSelect options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.rebagTargetSkuId} onChange={v=>setFormData({...formData, rebagTargetSkuId:v})} placeholder="Pilih SKU Hasil Kemasan..." /></div>
+                        <p className="text-xs text-slate-500 -mt-2">Tanggal produksi dan No. Batch dibuat otomatis. TM Hasil mengikuti MO dari data Inbound.</p>
                         <div><label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Lokasi Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
                       </>
                     )}
@@ -1977,8 +2439,36 @@ export default function App() {
                       <>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Barang yang akan Dikeluarkan</label>
-                          <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={v=>setFormData({...formData, outSkuId:v})} placeholder="Cari SKU..." />
+                          <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={handleOutboundSkuChange} placeholder="Cari SKU..." />
                         </div>
+
+                        {formData.outSkuId && outboundIsFinishedGoods && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-bold text-slate-700 mb-2">No. MO</label>
+                              <select
+                                className="w-full p-3 border border-slate-300 rounded-lg bg-white outline-none focus:border-orange-500"
+                                value={formData.outMoNumber}
+                                onChange={e=>handleOutboundMoChange(e.target.value)}
+                                required
+                              >
+                                <option value="">-- Pilih MO --</option>
+                                {outboundAvailableMos.map(mo=><option key={mo} value={mo}>{mo}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-sm font-bold text-slate-700 mb-2">No. TM <span className="font-normal text-green-600">(otomatis dari MO)</span></label>
+                              <input
+                                type="text"
+                                readOnly
+                                className="w-full p-3 border border-green-200 rounded-lg bg-green-50 text-green-800 font-bold outline-none"
+                                value={formData.outTmNumber}
+                                placeholder="Pilih MO terlebih dahulu"
+                              />
+                            </div>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
                             <label className="block text-sm font-bold text-slate-700 mb-2">No. SO <span className="font-normal text-slate-400">(opsional)</span></label>
@@ -1989,19 +2479,35 @@ export default function App() {
                             <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.outCustomer} onChange={e=>setFormData({...formData, outCustomer:e.target.value})} placeholder="Nama pelanggan / tujuan" />
                           </div>
                         </div>
-                        {formData.outSkuId && (
+
+                        {formData.outSkuId && (!outboundIsFinishedGoods || formData.outMoNumber) && (
                           <div className="bg-slate-50 p-4 sm:p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
-                            <h4 className="font-bold text-sm text-slate-700 mb-2 border-b pb-2">Tentukan jumlah keluar dari masing-masing gudang asal:</h4>
-                            {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).map(b => (
-                              <div key={b.batchId} className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-3 rounded-lg border shadow-sm gap-3">
-                                <div>
-                                  <p className="font-bold text-slate-800 text-sm">{b.sourceWarehouse}</p>
-                                  <p className="text-xs text-slate-500 font-mono mt-1">Stok Tersedia: <span className="font-bold text-blue-600">{b.currentQty}</span></p>
+                            <h4 className="font-bold text-sm text-slate-700 mb-2 border-b pb-2">
+                              Tentukan jumlah keluar dari batch stok GOOD:
+                            </h4>
+                            {inventoryBatches
+                              .filter(b =>
+                                b.skuId === formData.outSkuId &&
+                                Number(b.currentQty || 0) > 0 &&
+                                (!outboundIsFinishedGoods || b.moNumber === formData.outMoNumber)
+                              )
+                              .map(b => (
+                                <div key={b.batchId} className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-3 rounded-lg border shadow-sm gap-3">
+                                  <div>
+                                    <p className="font-bold text-slate-800 text-sm">{b.sourceWarehouse || b.targetStack || "-"}</p>
+                                    <p className="text-xs text-slate-500 font-mono mt-1">
+                                      Batch: {b.batchId} · MO: {b.moNumber || "-"} · TM: {b.resultTmNumber || b.tmNumber || "-"}
+                                    </p>
+                                    <p className="text-xs text-slate-500 mt-1">Stok GOOD: <span className="font-bold text-blue-600">{b.currentQty}</span></p>
+                                  </div>
+                                  <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-full sm:w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
                                 </div>
-                                <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-full sm:w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
-                              </div>
-                            ))}
-                            {inventoryBatches.filter(b => b.skuId === formData.outSkuId && b.currentQty > 0).length === 0 && <p className="text-sm text-red-500 italic">Stok untuk barang ini kosong.</p>}
+                              ))}
+                            {inventoryBatches.filter(b =>
+                              b.skuId === formData.outSkuId &&
+                              Number(b.currentQty || 0) > 0 &&
+                              (!outboundIsFinishedGoods || b.moNumber === formData.outMoNumber)
+                            ).length === 0 && <p className="text-sm text-red-500 italic">Stok GOOD untuk pilihan ini kosong.</p>}
                           </div>
                         )}
                       </>
