@@ -1,4 +1,4 @@
-name: QC Module Build Check
+name: QC Module Final Build Check
 
 on:
   push:
