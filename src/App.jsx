@@ -1645,7 +1645,9 @@ export default function App() {
       Tipe: t.type,
       SKU: t.skuName,
       "No. MO": t.moNumber || "",
+      "MO Sumber": Array.isArray(t.sourceMoNumbers) ? t.sourceMoNumbers.join(", ") : "",
       "No. TM": t.tmNumber || "",
+      "TM Bahan Sumber": Array.isArray(t.sourceTmNumbers) ? t.sourceTmNumbers.join(", ") : "",
       "TM Hasil": t.resultTmNumber || "",
       Qty: t.qtyChange,
       Operator: t.operator
@@ -2154,7 +2156,7 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                  <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-xl">
+                  <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-3xl">
                     {isVerifiedSuperAdmin && (
                       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
                         <label className="flex items-center gap-3 cursor-pointer">
@@ -2197,28 +2199,120 @@ export default function App() {
                       </div>
                     )}
                     {activeOpTab === 'inbound' && (
-                      <>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bahan Baku (SKU)</label><SearchableSelect options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.inSkuId} onChange={v=>setFormData({...formData, inSkuId:v})} placeholder="Ketik atau pilih SKU Curah..." /></div>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label><input type="number" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inQty} onChange={e=>setFormData({...formData, inQty:e.target.value})} placeholder="Contoh: 5000" required/></div>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. MO <span className="font-normal text-slate-400">(pengikat proses produksi)</span></label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inMoNumber} onChange={e=>handleInboundMoChange(e.target.value)} placeholder="Contoh: MO/4381/05/2026/09001" /></div>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">No. TM Bahan</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inTmNumber} onChange={e=>setFormData({...formData, inTmNumber:e.target.value})} placeholder="TM khusus bahan/SKU ini" /></div>
-                        <div>
-                          <label className="block text-sm font-bold text-slate-700 mb-2">TM Hasil <span className="font-normal text-slate-400">(untuk produk jadi/outbound)</span></label>
-                          <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inResultTmNumber} onChange={e=>setFormData({...formData, inResultTmNumber:e.target.value})} placeholder="TM hasil untuk MO yang sama" />
-                          <p className="text-xs text-slate-500 mt-1.5">Untuk bahan dengan MO yang sama, TM bahan boleh berbeda tetapi TM Hasil harus konsisten.</p>
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                          <div className="flex items-start gap-3">
+                            <PackagePlus size={20} className="mt-0.5 shrink-0 text-blue-600"/>
+                            <div>
+                              <h3 className="font-black text-blue-900">Inbound Multi-SKU</h3>
+                              <p className="mt-1 text-xs leading-5 text-blue-700">
+                                Satu penerimaan dapat berisi beberapa SKU. Setiap SKU menyimpan batch, MO, TM bahan, qty, dan gudang asalnya sendiri.
+                              </p>
+                            </div>
+                          </div>
                         </div>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal Pengirim</label><input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.inSourceWarehouse} onChange={e=>setFormData({...formData, inSourceWarehouse:e.target.value})} placeholder="Contoh: GST I" required/></div>
-                      </>
+
+                        {inboundLines.map((line, index) => (
+                          <div key={line.rowId} className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
+                            <div className="mb-4 flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-xs font-black uppercase tracking-[0.14em] text-blue-500">Bahan {index + 1}</div>
+                                <div className="mt-1 text-sm font-bold text-slate-700">Detail bahan masuk</div>
+                              </div>
+                              {inboundLines.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={()=>removeInboundLine(line.rowId)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-100"
+                                >
+                                  <Trash2 size={15}/> Hapus
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="space-y-4">
+                              <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">SKU Bahan</label>
+                                <SearchableSelect
+                                  options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
+                                  value={line.skuId}
+                                  onChange={v=>updateInboundLine(line.rowId,'skuId',v)}
+                                  placeholder="Pilih SKU bahan..."
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="block text-sm font-bold text-slate-700 mb-2">Jumlah / Kuantitas</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-blue-500"
+                                    value={line.qty}
+                                    onChange={e=>updateInboundLine(line.rowId,'qty',e.target.value)}
+                                    placeholder="0"
+                                    required
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal</label>
+                                  <input
+                                    type="text"
+                                    className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-blue-500"
+                                    value={line.sourceWarehouse}
+                                    onChange={e=>updateInboundLine(line.rowId,'sourceWarehouse',e.target.value)}
+                                    placeholder="Contoh: GST I / Gudang asal lain"
+                                    required
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="block text-sm font-bold text-slate-700 mb-2">No. MO Bahan</label>
+                                  <input
+                                    type="text"
+                                    className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-blue-500"
+                                    value={line.moNumber}
+                                    onChange={e=>updateInboundLine(line.rowId,'moNumber',e.target.value)}
+                                    placeholder="Nomor MO bahan ini"
+                                    required
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-bold text-slate-700 mb-2">No. TM Bahan</label>
+                                  <input
+                                    type="text"
+                                    className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-blue-500"
+                                    value={line.tmNumber}
+                                    onChange={e=>updateInboundLine(line.rowId,'tmNumber',e.target.value)}
+                                    placeholder="Nomor TM bahan ini"
+                                    required
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={addInboundLine}
+                          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-black text-blue-700 hover:bg-blue-100"
+                        >
+                          <PlusCircle size={18}/> Tambah SKU Bahan
+                        </button>
+                      </div>
                     )}
                     {activeOpTab === 'rebagging' && (
                       <>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-2">Target Produk Jadi</label>
                           <SearchableSelect
-                            options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))}
+                            options={skus.filter(s=>s.type==='rebagged').map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
                             value={formData.rebagTargetSkuId}
                             onChange={handleRebagTargetChange}
-                            placeholder="Pilih SKU Hasil Rebagging..."
+                            placeholder="Pilih SKU hasil Rebagging..."
                           />
                         </div>
 
@@ -2228,242 +2322,246 @@ export default function App() {
                             {activeRebagRecipe ? (
                               <div className="mt-2">
                                 <div className="font-black text-slate-800">{activeRebagRecipe.label}</div>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {activeRebagRecipe.materials.map((skuId) => (
-                                    <span key={skuId} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">
-                                      {skuId}
-                                    </span>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  Setiap bahan boleh berasal dari gudang, MO, dan TM yang berbeda. MO/TM mengikuti batch yang dipilih.
+                                </p>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {activeRebagRecipe.materials.map((skuId)=>(
+                                    <span key={skuId} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">{skuId}</span>
                                   ))}
                                 </div>
                               </div>
                             ) : (
-                              <p className="mt-2 text-sm text-slate-600">Belum ada preset komposisi. Gunakan mode bahan tunggal/manual.</p>
+                              <p className="mt-2 text-sm text-slate-600">Belum ada preset komposisi. Gunakan bahan tunggal/manual.</p>
                             )}
                           </div>
                         )}
 
-                        {!activeRebagRecipe && (
-                          <div>
-                            <label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Utama</label>
-                            <SearchableSelect
-                              options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))}
-                              value={formData.bulkSkuId}
-                              onChange={v=>{
-                                setFormData({...formData, bulkSkuId:v, bulkBatchId:"", rebagMoNumber:""});
-                                setRebagMaterialSelections({});
-                              }}
-                              placeholder="Pilih Bahan Baku..."
-                            />
-                          </div>
-                        )}
-
-                        {(activeRebagRecipe || formData.bulkSkuId) && (
-                          <div>
-                            <label className="block text-sm font-bold text-slate-700 mb-2">No. MO Produksi</label>
-                            <select
-                              className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white"
-                              value={formData.rebagMoNumber}
-                              onChange={e=>handleRebagMoChange(e.target.value)}
-                              required
-                            >
-                              <option value="">-- Pilih MO yang stok bahannya lengkap --</option>
-                              {rebagAvailableMos.map((mo)=><option key={mo} value={mo}>{mo}</option>)}
-                            </select>
-                            {rebagAvailableMos.length === 0 && (
-                              <p className="text-xs text-red-500 mt-1.5">Belum ada MO dengan stok bahan yang memenuhi komposisi.</p>
-                            )}
-                          </div>
-                        )}
-
-                        {activeRebagRecipe && formData.rebagMoNumber && (
+                        {activeRebagRecipe && (
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <h4 className="font-black text-slate-800">Bahan yang Digunakan</h4>
-                              <span className="text-xs font-bold text-red-600">MO sama · TM tiap bahan berbeda</span>
-                            </div>
-                            {activeRebagRecipe.materials.map((materialSkuId) => {
-                              const materialSku = skus.find(s=>s.id===materialSkuId);
-                              const selection = rebagMaterialSelections[materialSkuId] || {};
-                              const batchOptions = inventoryBatches.filter(
-                                b => b.skuId === materialSkuId &&
-                                     b.moNumber === formData.rebagMoNumber &&
-                                     Number(b.currentQty || 0) > 0
+                            <h4 className="font-black text-slate-800">Pilih Batch Bahan</h4>
+                            {activeRebagRecipe.materials.map((materialSkuId)=>{
+                              const materialSku=skus.find(s=>s.id===materialSkuId);
+                              const selection=rebagMaterialSelections[materialSkuId]||{};
+                              const batchOptions=inventoryBatches.filter(
+                                b=>b.skuId===materialSkuId && Number(b.currentQty||0)>0
                               );
-                              const selectedBatch = batchOptions.find(b=>b.batchId===selection.batchId);
+                              const selectedBatch=batchOptions.find(b=>b.batchId===selection.batchId);
                               return (
-                                <div key={materialSkuId} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                                <div key={materialSkuId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                                   <div className="mb-3">
                                     <div className="font-mono text-xs font-black text-red-600">{materialSkuId}</div>
-                                    <div className="font-bold text-slate-800">{materialSku?.name || "SKU belum ada di master"}</div>
+                                    <div className="font-bold text-slate-800">{materialSku?.name || 'SKU belum ada di master'}</div>
                                   </div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-[1.4fr_0.6fr] gap-3">
+                                  <div className="grid grid-cols-1 sm:grid-cols-[1.5fr_0.5fr] gap-3">
                                     <select
                                       className="w-full p-3 border border-slate-300 rounded-lg bg-white outline-none focus:border-red-500 text-sm"
-                                      value={selection.batchId || ""}
+                                      value={selection.batchId||''}
                                       onChange={e=>setRebagMaterialSelections(prev=>({
                                         ...prev,
-                                        [materialSkuId]: {...(prev[materialSkuId]||{}), batchId:e.target.value}
+                                        [materialSkuId]: {...(prev[materialSkuId]||{}),batchId:e.target.value}
                                       }))}
                                       required
                                     >
-                                      <option value="">-- Pilih Batch / TM --</option>
+                                      <option value="">-- Pilih Batch Bahan --</option>
                                       {batchOptions.map(b=>(
                                         <option key={b.batchId} value={b.batchId}>
-                                          TM: {b.tmNumber || "-"} · Stok: {b.currentQty} · {b.sourceWarehouse || "-"}
+                                          {b.sourceWarehouse||'-'} · MO: {b.moNumber||'-'} · TM: {b.tmNumber||'-'} · Stok: {b.currentQty}
                                         </option>
                                       ))}
                                     </select>
                                     <input
                                       type="number"
                                       min="0"
-                                      max={selectedBatch?.currentQty || undefined}
+                                      max={selectedBatch?.currentQty||undefined}
                                       className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 font-bold"
-                                      value={selection.qty || ""}
+                                      value={selection.qty||''}
                                       onChange={e=>setRebagMaterialSelections(prev=>({
                                         ...prev,
-                                        [materialSkuId]: {...(prev[materialSkuId]||{}), qty:e.target.value}
+                                        [materialSkuId]: {...(prev[materialSkuId]||{}),qty:e.target.value}
                                       }))}
                                       placeholder="Qty pakai"
                                       required
                                     />
                                   </div>
+                                  {selectedBatch && (
+                                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                                      <div className="rounded-lg bg-blue-50 px-3 py-2 text-blue-800"><span className="font-bold">MO:</span> {selectedBatch.moNumber||'-'}</div>
+                                      <div className="rounded-lg bg-violet-50 px-3 py-2 text-violet-800"><span className="font-bold">TM:</span> {selectedBatch.tmNumber||'-'}</div>
+                                      <div className="rounded-lg bg-slate-100 px-3 py-2 text-slate-700"><span className="font-bold">Gudang:</span> {selectedBatch.sourceWarehouse||'-'}</div>
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })}
                           </div>
                         )}
 
-                        {!activeRebagRecipe && formData.bulkSkuId && formData.rebagMoNumber && (
-                          <div>
-                            <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Batch / TM Bahan Baku</label>
-                            <SearchableSelect
-                              options={inventoryBatches
-                                .filter(b=>b.skuId===formData.bulkSkuId && b.moNumber===formData.rebagMoNumber && b.currentQty>0)
-                                .map(b=>({value:b.batchId, label:`TM: ${b.tmNumber || '-'} · ${b.sourceWarehouse} · Stok: ${b.currentQty}`}))}
-                              value={formData.bulkBatchId}
-                              onChange={v=>setFormData({...formData, bulkBatchId:v})}
-                              placeholder="Pilih Batch..."
-                            />
-                          </div>
+                        {!activeRebagRecipe && (
+                          <>
+                            <div>
+                              <label className="block text-sm font-bold text-slate-700 mb-2">Bahan Baku Utama</label>
+                              <SearchableSelect
+                                options={skus.filter(s=>s.type==='bulk').map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
+                                value={formData.bulkSkuId}
+                                onChange={v=>{
+                                  setFormData({...formData,bulkSkuId:v,bulkBatchId:''});
+                                  setRebagMaterialSelections({});
+                                }}
+                                placeholder="Pilih bahan baku..."
+                              />
+                            </div>
+                            {formData.bulkSkuId && (
+                              <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Batch Bahan Baku</label>
+                                <SearchableSelect
+                                  options={inventoryBatches
+                                    .filter(b=>b.skuId===formData.bulkSkuId && Number(b.currentQty||0)>0)
+                                    .map(b=>({value:b.batchId,label:`${b.sourceWarehouse||'-'} · MO: ${b.moNumber||'-'} · TM: ${b.tmNumber||'-'} · Stok: ${b.currentQty}`}))}
+                                  value={formData.bulkBatchId}
+                                  onChange={v=>setFormData({...formData,bulkBatchId:v})}
+                                  placeholder="Pilih batch bahan..."
+                                />
+                              </div>
+                            )}
+                          </>
                         )}
 
-                        {formData.rebagMoNumber && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
-                              <div className="text-xs font-bold uppercase tracking-wider text-blue-500">MO Produksi</div>
-                              <div className="mt-1 font-black text-blue-900 break-all">{formData.rebagMoNumber}</div>
-                            </div>
-                            <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-                              <div className="text-xs font-bold uppercase tracking-wider text-green-600">TM Hasil</div>
-                              <div className="mt-1 font-black text-green-900 break-all">{getResultTmForMo(formData.rebagMoNumber) || "Belum tercatat"}</div>
-                            </div>
-                          </div>
-                        )}
+                        <div className="rounded-2xl border border-green-200 bg-green-50/60 p-4">
+                          <label className="block text-sm font-black text-green-900 mb-2">TM Hasil</label>
+                          <input
+                            type="text"
+                            className="w-full p-3 border border-green-300 rounded-lg bg-white outline-none focus:border-green-600 font-bold text-green-900"
+                            value={formData.rebagResultTmNumber}
+                            onChange={e=>setFormData({...formData,rebagResultTmNumber:e.target.value})}
+                            placeholder="Masukkan TM hasil produksi"
+                            required
+                          />
+                          <p className="mt-2 text-xs text-green-700">TM Hasil dibuat pada proses Rebagging dan menjadi referensi utama produk jadi saat Outbound.</p>
+                        </div>
 
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas Hasil yang Diproses</label><input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData, qtyToProcess:e.target.value})} placeholder="0" /></div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas Hasil yang Diproses</label>
+                          <input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData,qtyToProcess:e.target.value})} placeholder="0" required/>
+                        </div>
 
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-                          <div className="flex items-start justify-between gap-3 mb-4">
-                            <div>
-                              <h4 className="font-black text-slate-800">Hasil Pemeriksaan Rebagging</h4>
-                              <p className="text-xs text-slate-500 mt-1">GOOD siap outbound, PROCESS menunggu rework, DAMAGE dipisahkan.</p>
-                            </div>
-                            <CheckCircle size={20} className="text-green-600 shrink-0"/>
+                          <div className="mb-4">
+                            <h4 className="font-black text-slate-800">Hasil Pemeriksaan Rebagging</h4>
+                            <p className="text-xs text-slate-500 mt-1">GOOD siap outbound, PROCESS menunggu rework, DAMAGE dipisahkan.</p>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <div><label className="block text-xs font-black text-green-700 mb-2">GOOD</label><input type="number" min="0" className="w-full p-3 border border-green-200 bg-white rounded-lg outline-none focus:border-green-500 font-bold text-green-700" value={formData.rebagGoodQty} onChange={e=>setFormData({...formData, rebagGoodQty:e.target.value})} placeholder="0" required /></div>
-                            <div><label className="block text-xs font-black text-amber-700 mb-2">PROCESS / REWORK</label><input type="number" min="0" className="w-full p-3 border border-amber-200 bg-white rounded-lg outline-none focus:border-amber-500 font-bold text-amber-700" value={formData.rebagProcessQty} onChange={e=>setFormData({...formData, rebagProcessQty:e.target.value})} placeholder="0" required /></div>
-                            <div><label className="block text-xs font-black text-red-700 mb-2">DAMAGE</label><input type="number" min="0" className="w-full p-3 border border-red-200 bg-white rounded-lg outline-none focus:border-red-500 font-bold text-red-700" value={formData.rebagDamageQty} onChange={e=>setFormData({...formData, rebagDamageQty:e.target.value})} placeholder="0" required /></div>
+                            <div><label className="block text-xs font-black text-green-700 mb-2">GOOD</label><input type="number" min="0" className="w-full p-3 border border-green-200 bg-white rounded-lg outline-none focus:border-green-500 font-bold text-green-700" value={formData.rebagGoodQty} onChange={e=>setFormData({...formData,rebagGoodQty:e.target.value})} placeholder="0" required/></div>
+                            <div><label className="block text-xs font-black text-amber-700 mb-2">PROCESS / REWORK</label><input type="number" min="0" className="w-full p-3 border border-amber-200 bg-white rounded-lg outline-none focus:border-amber-500 font-bold text-amber-700" value={formData.rebagProcessQty} onChange={e=>setFormData({...formData,rebagProcessQty:e.target.value})} placeholder="0" required/></div>
+                            <div><label className="block text-xs font-black text-red-700 mb-2">DAMAGE</label><input type="number" min="0" className="w-full p-3 border border-red-200 bg-white rounded-lg outline-none focus:border-red-500 font-bold text-red-700" value={formData.rebagDamageQty} onChange={e=>setFormData({...formData,rebagDamageQty:e.target.value})} placeholder="0" required/></div>
                           </div>
-                          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white border border-slate-200 px-4 py-3 text-xs">
+                          <div className="mt-4 flex items-center justify-between rounded-xl bg-white border border-slate-200 px-4 py-3 text-xs">
                             <span className="font-bold text-slate-500">Total hasil</span>
-                            <span className={`font-black ${Math.abs((Number(formData.rebagGoodQty || 0) + Number(formData.rebagProcessQty || 0) + Number(formData.rebagDamageQty || 0)) - Number(formData.qtyToProcess || 0)) < 0.0001 && Number(formData.qtyToProcess || 0) > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {Number(formData.rebagGoodQty || 0) + Number(formData.rebagProcessQty || 0) + Number(formData.rebagDamageQty || 0)} / {Number(formData.qtyToProcess || 0)}
+                            <span className={`font-black ${Math.abs((Number(formData.rebagGoodQty||0)+Number(formData.rebagProcessQty||0)+Number(formData.rebagDamageQty||0))-Number(formData.qtyToProcess||0))<0.0001 && Number(formData.qtyToProcess||0)>0?'text-green-600':'text-red-600'}`}>
+                              {Number(formData.rebagGoodQty||0)+Number(formData.rebagProcessQty||0)+Number(formData.rebagDamageQty||0)} / {Number(formData.qtyToProcess||0)}
                             </span>
                           </div>
                         </div>
 
-                        <div>
-                          <label className="block text-sm font-bold text-slate-700 mb-2">Tanggal Kadaluwarsa</label>
-                          <input type="date" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagExpiryDate} onChange={e=>setFormData({...formData, rebagExpiryDate:e.target.value})} required />
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Tanggal Kadaluwarsa</label>
+                            <input type="date" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagExpiryDate} onChange={e=>setFormData({...formData,rebagExpiryDate:e.target.value})} required/>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label>
+                            <select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData,rebagTargetStack:e.target.value})} required>
+                              <option value="">-- Pilih Lokasi Tumpukan --</option>
+                              {STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}
+                            </select>
+                          </div>
                         </div>
-                        <p className="text-xs text-slate-500 -mt-2">Tanggal produksi dan No. Batch dibuat otomatis. TM Hasil mengikuti MO dari data Inbound.</p>
-                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label><select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData, rebagTargetStack:e.target.value})}><option value="">-- Pilih Lokasi Tumpukan --</option>{STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
                       </>
                     )}
                     {activeOpTab === 'outbound' && (
                       <>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Barang yang akan Dikeluarkan</label>
-                          <SearchableSelect options={skus.map(s=>({value:s.id, label:`${s.id} - ${s.name}`}))} value={formData.outSkuId} onChange={handleOutboundSkuChange} placeholder="Cari SKU..." />
+                          <SearchableSelect
+                            options={skus.map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
+                            value={formData.outSkuId}
+                            onChange={handleOutboundSkuChange}
+                            placeholder="Cari SKU..."
+                          />
                         </div>
 
                         {formData.outSkuId && outboundIsFinishedGoods && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-bold text-slate-700 mb-2">No. MO</label>
-                              <select
-                                className="w-full p-3 border border-slate-300 rounded-lg bg-white outline-none focus:border-orange-500"
-                                value={formData.outMoNumber}
-                                onChange={e=>handleOutboundMoChange(e.target.value)}
-                                required
-                              >
-                                <option value="">-- Pilih MO --</option>
-                                {outboundAvailableMos.map(mo=><option key={mo} value={mo}>{mo}</option>)}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-sm font-bold text-slate-700 mb-2">No. TM <span className="font-normal text-green-600">(otomatis dari MO)</span></label>
-                              <input
-                                type="text"
-                                readOnly
-                                className="w-full p-3 border border-green-200 rounded-lg bg-green-50 text-green-800 font-bold outline-none"
-                                value={formData.outTmNumber}
-                                placeholder="Pilih MO terlebih dahulu"
-                              />
-                            </div>
+                          <div className="rounded-2xl border border-green-200 bg-green-50/60 p-4">
+                            <label className="block text-sm font-black text-green-900 mb-2">TM Hasil Produk Jadi</label>
+                            <select
+                              className="w-full p-3 border border-green-300 rounded-lg bg-white outline-none focus:border-green-600 font-bold text-green-900"
+                              value={formData.outTmNumber}
+                              onChange={e=>handleOutboundTmChange(e.target.value)}
+                              required
+                            >
+                              <option value="">-- Pilih TM Hasil --</option>
+                              {outboundAvailableResultTms.map(tm=><option key={tm} value={tm}>{tm}</option>)}
+                            </select>
+                            {outboundAvailableResultTms.length===0 && (
+                              <p className="mt-2 text-xs text-red-600">Belum ada stok GOOD produk jadi dengan TM Hasil.</p>
+                            )}
                           </div>
                         )}
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
                             <label className="block text-sm font-bold text-slate-700 mb-2">No. SO <span className="font-normal text-slate-400">(opsional)</span></label>
-                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.outSoNumber} onChange={e=>setFormData({...formData, outSoNumber:e.target.value})} placeholder="Nomor SO" />
+                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-orange-500" value={formData.outSoNumber} onChange={e=>setFormData({...formData,outSoNumber:e.target.value})} placeholder="Nomor SO"/>
                           </div>
                           <div>
                             <label className="block text-sm font-bold text-slate-700 mb-2">Nama Pelanggan <span className="font-normal text-slate-400">(opsional)</span></label>
-                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.outCustomer} onChange={e=>setFormData({...formData, outCustomer:e.target.value})} placeholder="Nama pelanggan / tujuan" />
+                            <input type="text" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-orange-500" value={formData.outCustomer} onChange={e=>setFormData({...formData,outCustomer:e.target.value})} placeholder="Nama pelanggan / tujuan"/>
                           </div>
                         </div>
 
-                        {formData.outSkuId && (!outboundIsFinishedGoods || formData.outMoNumber) && (
-                          <div className="bg-slate-50 p-4 sm:p-5 rounded-lg border border-slate-200 mt-4 space-y-4">
-                            <h4 className="font-bold text-sm text-slate-700 mb-2 border-b pb-2">
-                              Tentukan jumlah keluar dari batch stok GOOD:
-                            </h4>
+                        {formData.outSkuId && (!outboundIsFinishedGoods || formData.outTmNumber) && (
+                          <div className="bg-slate-50 p-4 sm:p-5 rounded-xl border border-slate-200 mt-4 space-y-4">
+                            <h4 className="font-bold text-sm text-slate-700 border-b pb-2">Pilih stok GOOD yang akan dikeluarkan:</h4>
                             {inventoryBatches
-                              .filter(b =>
-                                b.skuId === formData.outSkuId &&
-                                Number(b.currentQty || 0) > 0 &&
-                                (!outboundIsFinishedGoods || b.moNumber === formData.outMoNumber)
+                              .filter(b=>
+                                b.skuId===formData.outSkuId &&
+                                Number(b.currentQty||0)>0 &&
+                                (!outboundIsFinishedGoods || b.resultTmNumber===formData.outTmNumber)
                               )
-                              .map(b => (
+                              .map(b=>(
                                 <div key={b.batchId} className="flex flex-col sm:flex-row justify-between sm:items-center bg-white p-3 rounded-lg border shadow-sm gap-3">
                                   <div>
-                                    <p className="font-bold text-slate-800 text-sm">{b.sourceWarehouse || b.targetStack || "-"}</p>
-                                    <p className="text-xs text-slate-500 font-mono mt-1">
-                                      Batch: {b.batchId} · MO: {b.moNumber || "-"} · TM: {b.resultTmNumber || b.tmNumber || "-"}
-                                    </p>
+                                    <p className="font-bold text-slate-800 text-sm">{b.targetStack||b.sourceWarehouse||'-'}</p>
+                                    <p className="text-xs text-slate-500 font-mono mt-1">Batch: {b.batchId}</p>
+                                    {outboundIsFinishedGoods ? (
+                                      <>
+                                        <p className="text-xs text-green-700 font-bold mt-1">TM Hasil: {b.resultTmNumber||'-'}</p>
+                                        <p className="text-xs text-slate-500 mt-1">MO Sumber: {(b.sourceMoNumbers||[]).join(', ') || b.moNumber || '-'}</p>
+                                        <p className="text-xs text-slate-500 mt-1">TM Bahan: {(b.sourceTmNumbers||[]).join(', ') || '-'}</p>
+                                      </>
+                                    ) : (
+                                      <p className="text-xs text-slate-500 mt-1">MO: {b.moNumber||'-'} · TM: {b.tmNumber||'-'}</p>
+                                    )}
                                     <p className="text-xs text-slate-500 mt-1">Stok GOOD: <span className="font-bold text-blue-600">{b.currentQty}</span></p>
                                   </div>
-                                  <input type="number" min="0" max={b.currentQty} className="border border-slate-300 p-2.5 w-full sm:w-28 rounded-md text-center font-bold outline-none focus:border-red-500" placeholder="0" value={outboundSelections[b.batchId] || ""} onChange={e => setOutboundSelections({...outboundSelections, [b.batchId]: e.target.value})} />
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={b.currentQty}
+                                    className="border border-slate-300 p-2.5 w-full sm:w-28 rounded-md text-center font-bold outline-none focus:border-orange-500"
+                                    placeholder="0"
+                                    value={outboundSelections[b.batchId]||''}
+                                    onChange={e=>setOutboundSelections({...outboundSelections,[b.batchId]:e.target.value})}
+                                  />
                                 </div>
                               ))}
-                            {inventoryBatches.filter(b =>
-                              b.skuId === formData.outSkuId &&
-                              Number(b.currentQty || 0) > 0 &&
-                              (!outboundIsFinishedGoods || b.moNumber === formData.outMoNumber)
-                            ).length === 0 && <p className="text-sm text-red-500 italic">Stok GOOD untuk pilihan ini kosong.</p>}
+                            {inventoryBatches.filter(b=>
+                              b.skuId===formData.outSkuId &&
+                              Number(b.currentQty||0)>0 &&
+                              (!outboundIsFinishedGoods || b.resultTmNumber===formData.outTmNumber)
+                            ).length===0 && (
+                              <p className="text-sm text-red-500 italic">Stok GOOD untuk pilihan ini kosong.</p>
+                            )}
                           </div>
                         )}
                       </>
