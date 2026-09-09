@@ -4617,7 +4617,7 @@ Lanjutkan sebagai override Super Admin?`
                       onClick={()=>setActiveTabSettings('reset-data')}
                       className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='reset-data'?'bg-red-600 text-white shadow-lg shadow-red-100':'text-red-600 hover:bg-red-50'}`}
                     >
-                      <Trash2 size={17}/> Reset Data
+                      <Trash2 size={17}/> Arsip / Reset Data
                     </button>
                   )}
                 </div>
@@ -4999,7 +4999,7 @@ Lanjutkan sebagai override Super Admin?`
               )}
 
               {activeTabSettings === 'reset-data' && isVerifiedSuperAdmin && (
-                <div className="max-w-2xl">
+                <div className="max-w-3xl">
                   <div className="overflow-hidden rounded-2xl border border-red-200 bg-white shadow-sm">
                     <div className="border-b border-red-100 bg-gradient-to-r from-red-50 to-white p-5 sm:p-6">
                       <div className="flex items-start gap-4">
@@ -5007,10 +5007,10 @@ Lanjutkan sebagai override Super Admin?`
                           <Trash2 size={22}/>
                         </div>
                         <div>
-                          <div className="text-xs font-black uppercase tracking-[0.16em] text-red-500">Zona Berbahaya</div>
-                          <h3 className="mt-1 text-xl font-black text-slate-900">Reset Riwayat Transaksi</h3>
+                          <div className="text-xs font-black uppercase tracking-[0.16em] text-red-500">Data Operasional</div>
+                          <h3 className="mt-1 text-xl font-black text-slate-900">Arsip & Reset Data Uji</h3>
                           <p className="mt-2 text-sm leading-6 text-slate-600">
-                            Fitur ini hanya menghapus data pada riwayat transaksi Inbound, Rebagging, dan Outbound.
+                            Reset riwayat saja sudah dinonaktifkan karena dapat membuat stok tidak mempunyai jejak transaksi. Reset Data Uji sekarang membersihkan seluruh data operasional yang saling terkait secara bersamaan.
                           </p>
                         </div>
                       </div>
@@ -5018,34 +5018,53 @@ Lanjutkan sebagai override Super Admin?`
 
                     <div className="p-5 sm:p-6 space-y-5">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Akan Dihapus</p>
-                          <p className="mt-2 text-lg font-black text-red-600">{transactions.length} transaksi</p>
-                          <p className="mt-1 text-xs text-slate-500">Seluruh riwayat transaksi yang tersimpan.</p>
+                        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                          <p className="text-xs font-bold uppercase tracking-wider text-blue-500">Arsip Saja</p>
+                          <p className="mt-2 text-sm font-black text-blue-900">Download Excel Tanpa Menghapus</p>
+                          <p className="mt-1 text-xs leading-5 text-blue-700">
+                            Menyimpan snapshot Transactions, Batches, TM-MO, Batch Sequence, dan data TM legacy.
+                          </p>
                         </div>
-                        <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-                          <p className="text-xs font-bold uppercase tracking-wider text-green-600">Tetap Dipertahankan</p>
-                          <p className="mt-2 text-sm font-black text-green-800">Stok & Batch Inventori</p>
-                          <p className="mt-1 text-xs text-green-700">Master SKU, pengguna, dan konfigurasi juga tidak dihapus.</p>
+                        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                          <p className="text-xs font-bold uppercase tracking-wider text-red-500">Reset Data Uji</p>
+                          <p className="mt-2 text-sm font-black text-red-900">Kosongkan Data Operasional</p>
+                          <p className="mt-1 text-xs leading-5 text-red-700">
+                            Transaksi, stok/batch, mapping TM-MO, dan sequence batch akan dihapus bersama. Master SKU, Komposisi, Pengguna, dan Konfigurasi tetap ada.
+                          </p>
                         </div>
                       </div>
 
                       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
-                        <strong>Perhatian:</strong> setelah riwayat dihapus, kartu persediaan masih dapat dibuat dari stok aktif, tetapi detail pergerakan transaksi lama tidak lagi tersedia.
+                        <strong>Kenapa tidak ada reset per periode?</strong> Menghapus sebagian transaksi sementara saldo batch tetap berjalan dapat memutus traceability dan membuat kartu stok tidak konsisten. Untuk menyimpan data lama tanpa menghapus, gunakan Arsip Data Operasional.
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={handleResetTransactionHistory}
-                        disabled={resetHistoryLoading || transactions.length === 0}
-                        className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-red-100 transition-all hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-                      >
-                        <Trash2 size={18}/>
-                        {resetHistoryLoading ? "Menghapus Riwayat..." : transactions.length === 0 ? "Riwayat Sudah Kosong" : "Reset Seluruh Riwayat Transaksi"}
-                      </button>
+                      <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
+                        <strong>Backup otomatis:</strong> saat Reset Data Uji dijalankan, sistem membuat dan mengunduh file Excel arsip sebelum penghapusan dimulai.
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <button
+                          type="button"
+                          onClick={handleArchiveOperationalData}
+                          disabled={resetHistoryLoading}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-5 py-3 text-sm font-black text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Download size={18}/> Arsip Data Operasional
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleResetTransactionHistory}
+                          disabled={resetHistoryLoading}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-red-100 transition-all hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                        >
+                          <Trash2 size={18}/>
+                          {resetHistoryLoading ? "Memproses..." : "Reset Data Uji"}
+                        </button>
+                      </div>
 
                       <p className="text-xs leading-5 text-slate-400">
-                        Sistem akan meminta konfirmasi dua tahap sebelum proses penghapusan dijalankan.
+                        Reset memerlukan konfirmasi dua tahap dan pengetikan tepat "RESET DATA UJI".
                       </p>
                     </div>
                   </div>
