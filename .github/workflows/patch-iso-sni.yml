@@ -1,10 +1,10 @@
-name: One-time ISO SNI PDF Patch
+name: One-time ISO SNI Quality Record Patch
 
 on:
   push:
     paths:
       - ".github/workflows/patch-iso-sni.yml"
-      - ".github/scripts/patch_iso_sni_pdf.py"
+      - ".github/scripts/patch_iso_sni_quality_record.py"
 
 permissions:
   contents: write
@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Apply ISO SNI PDF layout
-        run: python .github/scripts/patch_iso_sni_pdf.py
+      - name: Apply quality record integration
+        run: python .github/scripts/patch_iso_sni_quality_record.py
       - name: Commit App changes
         run: |
           git config user.name "github-actions[bot]"
@@ -27,5 +27,5 @@ jobs:
             echo "No changes."
             exit 0
           fi
-          git commit -m "Upgrade rebag PDF to ISO SNI CPPOB ready format"
+          git commit -m "Add quality and nonconformity records to rebagging"
           git push
