@@ -4,7 +4,7 @@ import {
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
   Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye,
-  Menu, X, LogIn, UserRound, LockKeyhole, ClipboardList, ShieldAlert
+  Menu, X, LogIn, UserRound, LockKeyhole, ClipboardList, ShieldAlert, Scale
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
