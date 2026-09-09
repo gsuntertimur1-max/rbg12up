@@ -1031,7 +1031,9 @@ export default function App() {
         if (!item || typeof item === "string" || item.calculationMode) return item;
         const sku = skus.find((s) => s.id === item.skuId);
         const name = String(sku?.name || "").toUpperCase();
-        if (!name.includes("KARDUS") && !name.includes("KARTON")) return item;
+        const namedAsCarton = name.includes("KARDUS") || name.includes("KARTON");
+        const defaultGulaCarton = recipe.id === "GULA" && item.skuId === "D0200130X";
+        if (!namedAsCarton && !defaultGulaCarton) return item;
 
         changed = true;
         return {
@@ -1330,7 +1332,7 @@ export default function App() {
         if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
         if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
 
-        const recipe = getRebagRecipe(targetSku);
+        const recipe = getRebagRecipe(targetSku, rebagRecipes);
         let selectedMaterials = [];
 
         if (recipe) {
@@ -2693,6 +2695,12 @@ export default function App() {
                           </div>
                         )}
 
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas Hasil yang Diproses</label>
+                          <input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData,qtyToProcess:e.target.value})} placeholder="0" required/>
+                          <p className="mt-1.5 text-xs text-slate-500">Jumlah ini menjadi dasar perhitungan otomatis bahan kemasan yang memakai standar isi.</p>
+                        </div>
+
                         {activeRebagRecipe && (
                           <div className="space-y-3">
                             <h4 className="font-black text-slate-800">Pilih Batch Bahan</h4>
@@ -2856,11 +2864,6 @@ export default function App() {
                             required
                           />
                           <p className="mt-2 text-xs text-green-700">TM Hasil dibuat pada proses Rebagging dan menjadi referensi utama produk jadi saat Outbound.</p>
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas Hasil yang Diproses</label>
-                          <input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData,qtyToProcess:e.target.value})} placeholder="0" required/>
                         </div>
 
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
@@ -3129,6 +3132,11 @@ export default function App() {
                               <div className="text-[10px] text-slate-500 mt-1">
                                 G:{t.goodQty ?? t.qtyChange} · P:{t.processQty ?? 0} · D:{t.damageQty ?? 0}
                               </div>
+                              {Number(t.materialDamageTotal || 0) > 0 && (
+                                <div className="mt-1 text-[10px] font-bold text-red-500">
+                                  Bahan rusak: {t.materialDamageTotal}
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <span className={`text-lg ${t.type==='OUTBOUND' ? 'text-red-600' : 'text-green-600'}`}>
