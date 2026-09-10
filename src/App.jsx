@@ -3202,11 +3202,17 @@ export default function App() {
 
             const referenceDate = new Date(date);
             const candidateBatches = sortBatchesFefoFifo(
-              inventoryBatches.filter(
-                (batch) =>
-                  batch.skuId === materialSkuId &&
-                  Number(batch.currentQty || 0) > 0
-              ),
+              inventoryBatches.filter((batch) => {
+                if (!(batch.skuId === materialSkuId && Number(batch.currentQty || 0) > 0 && isRawBatchQcUsable(batch))) {
+                  return false;
+                }
+                if (!formData.rebagProcessingLocationId) return true;
+                if (batch.physicalLocationId) {
+                  return batch.physicalLocationId === formData.rebagProcessingLocationId;
+                }
+                return getBatchPhysicalLocation(batch, systemConfig).toUpperCase() ===
+                  getLocationDisplayName(processingLocation).toUpperCase();
+              }),
               referenceDate
             );
             const usableCandidates = candidateBatches.filter(
@@ -3848,8 +3854,19 @@ Masukkan alasan override Super Admin:`
           const isFullActiveMove = Math.abs(moveQty - liveQty) <= 0.0001 && !hasOtherQualityQty;
           let destinationBatchId = liveBatch.batchId;
 
+          const supportMaterialMove = isPackagingMaterialSku(sourceSku);
+          const sourceAdministrativeWarehouse =
+            liveBatch.administrativeWarehouse ||
+            (Array.isArray(liveBatch.administrativeWarehouses)
+              ? liveBatch.administrativeWarehouses.join(", ")
+              : liveBatch.sourceWarehouse || "");
+          const destinationAdministrativeWarehouse = supportMaterialMove
+            ? destinationName
+            : sourceAdministrativeWarehouse;
+
           if (isFullActiveMove) {
             transaction.update(sourceRef, {
+              ...(supportMaterialMove ? { administrativeWarehouse: destinationAdministrativeWarehouse } : {}),
               physicalLocationId: destination.id,
               physicalLocation: destinationName,
               physicalLocationName: destinationName,
@@ -3905,6 +3922,7 @@ Masukkan alasan override Super Admin:`
                     damageKg: 0,
                   }
                 : {}),
+              administrativeWarehouse: destinationAdministrativeWarehouse,
               physicalLocationId: destination.id,
               physicalLocation: destinationName,
               physicalLocationName: destinationName,
@@ -3931,12 +3949,11 @@ Masukkan alasan override Super Admin:`
               mainMoNumber: liveBatch.mainMoNumber || getPrimaryMoNumber(liveBatch) || "",
               tmNumber: liveBatch.tmNumber || "",
               resultTmNumber: liveBatch.resultTmNumber || "",
-              administrativeWarehouse:
-                liveBatch.administrativeWarehouse ||
-                (Array.isArray(liveBatch.administrativeWarehouses)
-                  ? liveBatch.administrativeWarehouses.join(", ")
-                  : ""),
+              administrativeWarehouse: destinationAdministrativeWarehouse,
+              administrativeWarehouseBefore: sourceAdministrativeWarehouse,
+              administrativeWarehouseAfter: destinationAdministrativeWarehouse,
               administrativeWarehouses: liveBatch.administrativeWarehouses || [],
+              supportMaterialMove,
               fromPhysicalLocationId: liveBatch.physicalLocationId || "",
               fromPhysicalLocation: sourceLocationName,
               toPhysicalLocationId: destination.id,
@@ -7321,7 +7338,7 @@ Masukkan alasan override Super Admin:`
                             <div>
                               <h3 className="font-black text-cyan-900">Mutasi Internal Lokasi Fisik</h3>
                               <p className="mt-1 text-xs leading-5 text-cyan-700">
-                                Memindahkan posisi fisik stok tanpa mengubah Gudang Administrasi, MO, TM, atau identitas asal. Mutasi parsial otomatis membentuk batch lokasi turunan agar saldo per lokasi tetap akurat.
+                                Memindahkan posisi fisik stok tanpa mengubah MO, TM, atau identitas asal. Untuk Beras/Gula Gudang Administrasi tetap; khusus kemasan/kardus Gudang Administrasi mengikuti lokasi fisik tujuan. Mutasi parsial otomatis membentuk batch lokasi turunan.
                               </p>
                             </div>
                           </div>
