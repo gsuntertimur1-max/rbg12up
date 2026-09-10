@@ -1,0 +1,38 @@
+name: Apply QC Per MO Preview
+
+on:
+  push:
+    branches:
+      - qc-per-mo-implementation-20260910
+    paths:
+      - '.github/scripts/patch_qc_per_mo.py'
+      - '.github/workflows/apply-qc-per-mo-preview.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qc-per-mo-implementation-20260910
+          fetch-depth: 0
+      - name: Apply QC per MO patch
+        run: python .github/scripts/patch_qc_per_mo.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install
+      - name: Build application
+        run: npm run build
+      - name: Commit verified application changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx
+          git diff --cached --quiet && exit 0
+          git commit -m "Change incoming QC scope from batch to MO"
+          git push origin HEAD:qc-per-mo-implementation-20260910
