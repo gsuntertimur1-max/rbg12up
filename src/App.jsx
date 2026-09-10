@@ -154,11 +154,14 @@ const DEFAULT_USERS = [
 
 // Hak proses per role. Super Admin sengaja tidak dimasukkan agar aksesnya tetap penuh.
 const ROLE_PROCESS_PERMISSIONS = {
-  Admin: ["inbound", "rebagging", "mutation", "outbound"],
-  Operator: ["rebagging"],
-  QC: ["qc"],
-  Viewer: [],
+  admin: ["inbound", "rebagging", "mutation", "outbound"],
+  operator: ["rebagging"],
+  qc: ["qc"],
+  viewer: [],
 };
+
+const normalizeRole = (role) =>
+  String(role || "").trim().toLowerCase();
 
 const OPERATION_PERMISSION_BY_TAB = {
   inbound: "inbound",
@@ -2726,16 +2729,51 @@ export default function App() {
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
-  const canPerform = (permission) =>
-    Boolean(
+  const canPerform = (permission) => {
+    const role = normalizeRole(currentUser?.role);
+    return Boolean(
       currentUser &&
-      (currentUser.role === "Super Admin" ||
-        ROLE_PROCESS_PERMISSIONS[currentUser.role]?.includes(permission))
+      (role === "super admin" ||
+        ROLE_PROCESS_PERMISSIONS[role]?.includes(permission))
     );
+  };
   const canAccessOperations = () =>
     Object.values(OPERATION_PERMISSION_BY_TAB).some((permission) =>
       canPerform(permission)
     );
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role === "Viewer") return;
+    const savedUser = users.find((user) => user.username === currentUser.username);
+    if (!savedUser || savedUser.role === currentUser.role) return;
+    const refreshedSession = {
+      username: savedUser.username,
+      role: savedUser.role,
+    };
+    setCurrentUser(refreshedSession);
+    localStorage.setItem("rebagging_session", JSON.stringify(refreshedSession));
+  }, [users, currentUser?.username, currentUser?.role]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    if (activeMenu === "operations") {
+      const allowedTabs = Object.entries(OPERATION_PERMISSION_BY_TAB)
+        .filter(([, permission]) => canPerform(permission))
+        .map(([tab]) => tab);
+
+      if (allowedTabs.length === 0) {
+        setActiveMenu("dashboard");
+      } else if (!allowedTabs.includes(activeOpTab)) {
+        setActiveOpTab(allowedTabs[0]);
+      }
+    }
+
+    if (activeMenu === "qc" && !canPerform("qc")) {
+      setActiveMenu("dashboard");
+    }
+  }, [currentUser?.role, activeMenu, activeOpTab]);
+
   const isVerifiedSuperAdmin = Boolean(
     currentUser?.role === "Super Admin" &&
     users.some(
