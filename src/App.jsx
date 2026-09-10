@@ -152,6 +152,21 @@ const DEFAULT_USERS = [
   { username: "operator", password: "123456", role: "Operator" },
 ];
 
+// Hak proses per role. Super Admin sengaja tidak dimasukkan agar aksesnya tetap penuh.
+const ROLE_PROCESS_PERMISSIONS = {
+  Admin: ["inbound", "rebagging", "mutation", "outbound"],
+  Operator: ["rebagging"],
+  QC: ["qc"],
+  Viewer: [],
+};
+
+const OPERATION_PERMISSION_BY_TAB = {
+  inbound: "inbound",
+  rebagging: "rebagging",
+  internal_move: "mutation",
+  outbound: "outbound",
+};
+
 const DEFAULT_REBAG_RECIPES = [
   {
     id: "FORTIVIT_1KG",
@@ -2711,6 +2726,16 @@ export default function App() {
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
+  const canPerform = (permission) =>
+    Boolean(
+      currentUser &&
+      (currentUser.role === "Super Admin" ||
+        ROLE_PROCESS_PERMISSIONS[currentUser.role]?.includes(permission))
+    );
+  const canAccessOperations = () =>
+    Object.values(OPERATION_PERMISSION_BY_TAB).some((permission) =>
+      canPerform(permission)
+    );
   const isVerifiedSuperAdmin = Boolean(
     currentUser?.role === "Super Admin" &&
     users.some(
@@ -2958,6 +2983,20 @@ export default function App() {
   const handleLogout = () => { setCurrentUser(null); localStorage.removeItem("rebagging_session"); setActiveMenu("dashboard"); };
 
   const handleNavClick = (menuName) => {
+    if (menuName === "operations") {
+      const allowedTabs = Object.entries(OPERATION_PERMISSION_BY_TAB)
+        .filter(([, permission]) => canPerform(permission))
+        .map(([tab]) => tab);
+      if (allowedTabs.length === 0) {
+        return alert("Anda tidak memiliki akses proses operasional.");
+      }
+      if (!allowedTabs.includes(activeOpTab)) {
+        setActiveOpTab(allowedTabs[0]);
+      }
+    }
+    if (menuName === "qc" && !canPerform("qc")) {
+      return alert("Anda tidak memiliki akses proses Quality Control.");
+    }
     setActiveMenu(menuName);
     setIsSidebarOpen(false);
   };
@@ -3043,6 +3082,10 @@ export default function App() {
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
 
+    const requiredPermission = OPERATION_PERMISSION_BY_TAB[activeOpTab];
+    if (!requiredPermission || !canPerform(requiredPermission)) {
+      return alert("Anda tidak memiliki hak akses untuk proses ini.");
+    }
     if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
 
     const timestamp = Date.now();
@@ -4283,8 +4326,8 @@ Masukkan alasan override Super Admin:`
   const handleProcessResolutionSubmit = async (e) => {
     e.preventDefault();
 
-    if (!hasAccess(["Super Admin", "Admin", "Operator"])) {
-      return alert("Anda tidak memiliki akses untuk menindaklanjuti barang PROCESS.");
+    if (!canPerform("rebagging")) {
+      return alert("Tindak lanjut barang PROCESS hanya tersedia untuk pengguna dengan akses Rebagging.");
     }
     if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
 
@@ -5571,7 +5614,7 @@ Masukkan alasan override Super Admin:`
 
   const handleQcSubmit = async (e) => {
     e.preventDefault();
-    if (!hasAccess(["Super Admin", "Admin", "QC"])) return alert("Akses keputusan QC hanya tersedia untuk QC/Admin/Super Admin.");
+    if (!canPerform("qc")) return alert("Akses keputusan QC hanya tersedia untuk QC dan Super Admin.");
     if (!db) return alert("Database belum siap.");
     const isIncoming = activeQcTab === "incoming";
 
@@ -6427,8 +6470,8 @@ Masukkan alasan override Super Admin:`
         <nav className="p-4 flex-1 space-y-1.5 text-sm mt-2">
           <button onClick={()=>handleNavClick("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
           <button onClick={()=>handleNavClick("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
-          {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
-          {hasAccess(["Super Admin", "Admin", "QC"]) && <button onClick={()=>handleNavClick("qc")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="qc"?"bg-emerald-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><CheckCircle size={18}/> Quality Control</button>}
+          {canAccessOperations() && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
+          {canPerform("qc") && <button onClick={()=>handleNavClick("qc")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="qc"?"bg-emerald-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><CheckCircle size={18}/> Quality Control</button>}
           <button onClick={()=>handleNavClick("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
           <button onClick={()=>handleNavClick("reports")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="reports"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><ClipboardList size={18}/> Laporan Produksi</button>
           {hasAccess(["Super Admin"]) && <button onClick={()=>handleNavClick("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
@@ -6851,36 +6894,36 @@ Masukkan alasan override Super Admin:`
           )}
 
           {/* OPERATIONS */}
-          {activeMenu === "operations" && hasAccess(["Super Admin", "Admin", "Operator"]) && (
+          {activeMenu === "operations" && canAccessOperations() && (
             <div className="space-y-6">
                <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
                <div className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200">
                   <div className="mb-8 overflow-x-auto pb-1">
                     <div className="inline-flex min-w-max items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
-                      <button
+                      {canPerform("inbound") && <button
                         onClick={()=>setActiveOpTab('inbound')}
                         className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='inbound'?'bg-blue-600 text-white shadow-lg shadow-blue-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                       >
                         <PackagePlus size={17}/> Inbound
-                      </button>
-                      <button
+                      </button>}
+                      {canPerform("rebagging") && <button
                         onClick={()=>setActiveOpTab('rebagging')}
                         className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='rebagging'?'bg-red-600 text-white shadow-lg shadow-red-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                       >
                         <Settings2 size={17}/> Rebagging
-                      </button>
-                      <button
+                      </button>}
+                      {canPerform("mutation") && <button
                         onClick={()=>setActiveOpTab('internal_move')}
                         className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='internal_move'?'bg-cyan-600 text-white shadow-lg shadow-cyan-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                       >
                         <ArrowRightLeft size={17}/> Mutasi Internal
-                      </button>
-                      <button
+                      </button>}
+                      {canPerform("outbound") && <button
                         onClick={()=>setActiveOpTab('outbound')}
                         className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='outbound'?'bg-orange-500 text-white shadow-lg shadow-orange-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                       >
                         <ArrowRightLeft size={17}/> Outbound
-                      </button>
+                      </button>}
                     </div>
                   </div>
                   <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-3xl">
@@ -8126,7 +8169,7 @@ Masukkan alasan override Super Admin:`
 
 
           {/* QUALITY CONTROL */}
-          {activeMenu === "qc" && hasAccess(["Super Admin", "Admin", "QC"]) && (
+          {activeMenu === "qc" && canPerform("qc") && (
             <div className="space-y-6">
               <div><h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Quality Control</h1><p className="mt-2 text-sm text-slate-500">QC Bahan Masuk dilakukan per MO dan dapat mencakup beberapa TM bahan sekaligus. QC Produk Jadi tetap dilakukan per batch produksi sebelum Outbound.</p></div>
               <div className="inline-flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
