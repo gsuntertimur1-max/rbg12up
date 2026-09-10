@@ -10,7 +10,7 @@ def rep(old, new, label, count=1):
     for _ in range(count):
         s = s.replace(old, new, 1)
 
-# 1. Default operator process-deviation state.
+# 1) Default operator process-deviation state.
 rep(
 '''    rebagCoaNumber: "", rebagQualityStatus: "MENUNGGU",
     rebagDeviation: "", rebagCorrectiveAction: "",''',
@@ -19,7 +19,15 @@ rep(
 'initial process deviation state'
 )
 
-# 2. Validation + snapshots: operator records process deviations, not final quality decisions.
+# 2) No./Kode Tumpukan is optional; Exp Date remains mandatory.
+rep(
+'''        if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
+        if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");''',
+'''        if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");''',
+'optional finished stack validation'
+)
+
+# 3) Operator records process deviations, not a final quality decision.
 old = '''        const qualityStatus = formData.rebagQualityStatus || "MENUNGGU";
         const deviation = String(formData.rebagDeviation || "").trim();
         const correctiveAction = String(formData.rebagCorrectiveAction || "").trim();
@@ -63,7 +71,8 @@ new = '''        const processDeviationStatus =
           recordedBy: currentUser.username,
         };
 
-        // Dipertahankan untuk kompatibilitas PDF/riwayat lama. Keputusan mutu akhir tetap di QC Produk Jadi.
+        // Legacy qualityControl fields are retained so old PDFs/history stay readable.
+        // Final quality approval remains the responsibility of QC Produk Jadi.
         const qualityControlSnapshot = {
           coaNumber: String(formData.rebagCoaNumber || "").trim(),
           qualityStatus: "MENUNGGU_QC",
@@ -74,7 +83,7 @@ new = '''        const processDeviationStatus =
         };'''
 rep(old, new, 'process deviation validation and snapshot')
 
-# Store explicit processDeviation on finished batch + rebagging transaction.
+# Explicit new field on batch and transaction, while keeping old snapshot compatible.
 rep(
 '''            documentControl: documentControlSnapshot,
             qualityControl: qualityControlSnapshot,
@@ -93,10 +102,10 @@ rep(
               qualityControl: qualityControlSnapshot,
               processDeviation: processDeviationSnapshot,
               ...auditMeta,''',
-'rebag tx process deviation'
+'rebag transaction process deviation'
 )
 
-# 3. Operator UI: change quality language into process deviation recording.
+# 4) Operator UI: replace Status Mutu with Penyimpangan Proses.
 old = '''                            <div>
                               <label className="block text-xs font-bold text-slate-600 mb-1.5">Status Mutu</label>
                               <select
@@ -131,46 +140,57 @@ new = '''                            <div>
                             </div>'''
 rep(old, new, 'operator process deviation selector')
 
-# Replace always-visible deviation/action fields with conditional fields.
 old = '''                          <div>
                             <label className="block text-xs font-bold text-slate-600 mb-1.5">Penyimpangan / Ketidaksesuaian</label>
                             <textarea
                               rows="2"
                               className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 resize-y"
                               value={formData.rebagDeviation}
-                              onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}'''
-new = '''                          {formData.rebagQualityStatus === "ADA_PENYIMPANGAN" && (
-                            <div>
-                              <label className="block text-xs font-bold text-red-600 mb-1.5">Kejadian / Penyimpangan Proses</label>
-                              <textarea
-                                rows="2"
-                                className="w-full rounded-lg border border-red-200 bg-red-50/40 p-3 outline-none focus:border-red-500 resize-y"
-                                value={formData.rebagDeviation}
-                                onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}'''
-rep(old, new, 'conditional deviation field opening')
+                              onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}
+                              placeholder="Kosongkan bila tidak ada penyimpangan."
+                            />
+                          </div>
 
-# The original two fields sit consecutively; rename action and close conditional after the second field.
-rep(
-'''                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Tindakan Koreksi</label>''',
-'''                            <label className="block text-xs font-bold text-amber-700 mb-1.5">Tindakan yang Dilakukan</label>''',
-'operator action label'
-)
-
-# Find the first corrective-action textarea closing block after operator form and wrap closing conditional.
-needle = '''                              value={formData.rebagCorrectiveAction}
+                          <div>
+                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Tindakan Koreksi / Disposisi</label>
+                            <textarea
+                              rows="2"
+                              className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 resize-y"
+                              value={formData.rebagCorrectiveAction}
                               onChange={e=>setFormData({...formData,rebagCorrectiveAction:e.target.value})}
-'''
-pos = s.find(needle)
-if pos < 0:
-    raise SystemExit('Patch target not found: corrective action textarea')
-close = s.find('''                            </div>''', pos)
-if close < 0:
-    raise SystemExit('Patch target not found: corrective action closing div')
-close_end = close + len('''                            </div>''')
-s = s[:close_end] + '''
-                          )}''' + s[close_end:]
+                              placeholder="Wajib diisi bila Status Mutu = TIDAK SESUAI."
+                            />
+                          </div>'''
+new = '''                          {formData.rebagQualityStatus === "ADA_PENYIMPANGAN" && (
+                            <>
+                              <div>
+                                <label className="block text-xs font-bold text-red-600 mb-1.5">Kejadian / Penyimpangan Proses</label>
+                                <textarea
+                                  rows="2"
+                                  className="w-full rounded-lg border border-red-200 bg-red-50/40 p-3 outline-none focus:border-red-500 resize-y"
+                                  value={formData.rebagDeviation}
+                                  onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}
+                                  placeholder="Jelaskan kejadian/penyimpangan yang terjadi saat proses."
+                                  required
+                                />
+                              </div>
 
-# 4. Tumpukan = optional specific position, not duplicate warehouse/location.
+                              <div>
+                                <label className="block text-xs font-bold text-amber-700 mb-1.5">Tindakan yang Dilakukan</label>
+                                <textarea
+                                  rows="2"
+                                  className="w-full rounded-lg border border-amber-200 bg-amber-50/40 p-3 outline-none focus:border-amber-500 resize-y"
+                                  value={formData.rebagCorrectiveAction}
+                                  onChange={e=>setFormData({...formData,rebagCorrectiveAction:e.target.value})}
+                                  placeholder="Jelaskan tindakan langsung yang dilakukan operator."
+                                  required
+                                />
+                              </div>
+                            </>
+                          )}'''
+rep(old, new, 'conditional process deviation fields')
+
+# 5) Tumpukan is a specific optional position inside the already selected finished location.
 old = '''                          <div>
                             <label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label>
                             <select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData,rebagTargetStack:e.target.value})} required>
@@ -189,13 +209,13 @@ new = '''                          {formData.rebagFinishedLocationId && (
                                 placeholder="Contoh: Tumpukan A01 / Blok 3"
                               />
                               <p className="mt-1.5 text-[10px] leading-4 text-slate-500">
-                                Hanya untuk posisi spesifik di dalam Lokasi Produk Jadi. Kosongkan bila lokasi tersebut tidak menggunakan kode tumpukan.
+                                Posisi spesifik di dalam Lokasi Produk Jadi yang sudah dipilih. Kosongkan bila lokasi tersebut tidak memakai kode tumpukan.
                               </p>
                             </div>
                           )}'''
 rep(old, new, 'optional specific finished stack')
 
-# 5. Rebag PDF terminology: operator deviation is not final QC decision.
+# 6) Rebag PDF terminology follows the new operator responsibility.
 rep(
 '''    "Status mutu: " +
       (qualityControl.qualityStatus || "SESUAI [ ]  TIDAK SESUAI [ ]  MENUNGGU [ ]"),''',
@@ -205,10 +225,18 @@ rep(
         : "TIDAK ADA"),''',
 'PDF process deviation status'
 )
-rep('''"Penyimpangan / ketidaksesuaian:"''','''"Kejadian / penyimpangan proses:"''','PDF deviation label')
-rep('''"Tindakan koreksi:"''','''"Tindakan yang dilakukan:"''','PDF action label')
+rep(
+'''"Penyimpangan / ketidaksesuaian:"''',
+'''"Kejadian / penyimpangan proses:"''',
+'PDF deviation label'
+)
+rep(
+'''"Tindakan koreksi / disposisi:"''',
+'''"Tindakan yang dilakukan:"''',
+'PDF action label'
+)
 
-# 6. Stock card terminology for finished goods.
+# Finished-goods stock card also treats stack as a code/position, not the warehouse itself.
 rep(
 '''["Lokasi Tumpukan", batchMeta.targetStack || ""],''',
 '''["No./Kode Tumpukan", batchMeta.targetStack || "-"],''',
