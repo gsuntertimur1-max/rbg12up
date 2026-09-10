@@ -4514,6 +4514,53 @@ Masukkan alasan override Super Admin:`
           });
         });
 
+        const finishedWarehouseMap = {};
+        productRows.forEach((row) => {
+          const warehouse = String(row.targetStack || "-");
+          const key = `${row.skuId}|${warehouse}`;
+          if (!finishedWarehouseMap[key]) {
+            finishedWarehouseMap[key] = {
+              key,
+              skuId: row.skuId,
+              name: row.name,
+              warehouse,
+              good: 0,
+              process: 0,
+              damage: 0,
+              batchCount: 0,
+              tmResults: new Set(),
+              qcStatuses: new Set(),
+            };
+          }
+
+          finishedWarehouseMap[key].good += Number(row.good || 0);
+          finishedWarehouseMap[key].process += Number(row.process || 0);
+          finishedWarehouseMap[key].damage += Number(row.damage || 0);
+          finishedWarehouseMap[key].batchCount += 1;
+          if (row.tmResult) finishedWarehouseMap[key].tmResults.add(row.tmResult);
+          if (row.qcStatus) finishedWarehouseMap[key].qcStatuses.add(row.qcStatus);
+        });
+
+        const finishedWarehouseRows = Object.values(finishedWarehouseMap)
+          .map((row) => ({
+            ...row,
+            tmResult: [...row.tmResults].sort().join(", "),
+            qcStatus: [...row.qcStatuses].sort().join(", ") || "-",
+            total: row.good + row.process + row.damage,
+          }))
+          .sort((a, b) => {
+            const warehouseCompare = a.warehouse.localeCompare(
+              b.warehouse,
+              undefined,
+              { numeric: true, sensitivity: "base" }
+            );
+            if (warehouseCompare !== 0) return warehouseCompare;
+            return a.name.localeCompare(b.name, undefined, {
+              numeric: true,
+              sensitivity: "base",
+            });
+          });
+
         const consumedKg = group.rawUsedKg + group.rawDamageKg;
         const progress =
           group.rawInitialKg > 0
@@ -4524,6 +4571,7 @@ Masukkan alasan override Super Admin:`
           ...group,
           warehouses,
           productRows,
+          finishedWarehouseRows,
           consumedKg,
           progress,
         };
@@ -5572,10 +5620,10 @@ Masukkan alasan override Super Admin:`
                           <div>
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="rounded-lg bg-violet-100 px-3 py-1.5 font-mono text-xs font-black text-violet-700">
-                                MO {group.mo}
+                                {String(group.mo).trim().toUpperCase().startsWith("MO") ? group.mo : `MO ${group.mo}`}
                               </span>
                               <span className="text-xs font-bold text-slate-400">
-                                {group.warehouses.length} gudang/SKU sumber · {group.productRows.length} batch produk jadi aktif
+                                {group.warehouses.length} gudang/SKU sumber · {group.finishedWarehouseRows.length} produk/gudang · {group.productRows.length} batch aktif
                               </span>
                             </div>
                             <div className="mt-3 text-sm font-bold text-slate-700">
@@ -5677,7 +5725,7 @@ Masukkan alasan override Super Admin:`
 
                       <div>
                         <div className="flex items-center justify-between gap-3">
-                          <h3 className="font-black text-slate-900">Produk Jadi dari MO {group.mo}</h3>
+                          <h3 className="font-black text-slate-900">Produk Jadi · {String(group.mo).trim().toUpperCase().startsWith("MO") ? group.mo : `MO ${group.mo}`}</h3>
                           <div className="text-xs font-bold text-slate-500">
                             Produksi kumulatif: {group.producedPack.toLocaleString("id-ID")} Pack
                           </div>
@@ -5686,39 +5734,37 @@ Masukkan alasan override Super Admin:`
                           <table className="w-full min-w-[1040px] text-sm">
                             <thead className="bg-slate-50 text-slate-500">
                               <tr>
-                                <th className="p-3 text-left">Gudang Asal</th>
                                 <th className="p-3 text-left">Produk</th>
+                                <th className="p-3 text-left">Gudang / Tumpukan</th>
                                 <th className="p-3 text-left">TM Hasil</th>
-                                <th className="p-3 text-left">Batch</th>
-                                <th className="p-3 text-left">Tgl Produksi</th>
+                                <th className="p-3 text-center">Batch</th>
                                 <th className="p-3 text-right">GOOD</th>
                                 <th className="p-3 text-right">PROCESS</th>
                                 <th className="p-3 text-right">DAMAGE</th>
-                                <th className="p-3 text-left">Tumpukan</th>
+                                <th className="p-3 text-right">TOTAL</th>
                                 <th className="p-3 text-center">QC</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                              {group.productRows.map(row=>(
-                                <tr key={row.batchId}>
-                                  <td className="p-3 font-bold text-slate-700">{row.sourceWarehouses}</td>
+                              {group.finishedWarehouseRows.map(row=>(
+                                <tr key={row.key}>
                                   <td className="p-3">
                                     <div className="font-mono text-[10px] font-black text-emerald-600">{row.skuId}</div>
                                     <div className="mt-1 font-bold text-slate-900">{row.name}</div>
                                   </td>
+                                  <td className="p-3 font-bold text-slate-700">{row.warehouse}</td>
                                   <td className="p-3 text-xs font-bold text-green-700">{row.tmResult || "-"}</td>
-                                  <td className="p-3 font-mono text-xs font-black text-blue-700">{row.batchId}</td>
-                                  <td className="p-3 text-xs">{formatPdfDate(row.productionDate) || "-"}</td>
+                                  <td className="p-3 text-center font-bold text-slate-600">{row.batchCount}</td>
                                   <td className="p-3 text-right font-black text-emerald-700">{row.good.toLocaleString("id-ID")}</td>
                                   <td className="p-3 text-right font-bold text-amber-700">{row.process ? row.process.toLocaleString("id-ID") : "-"}</td>
                                   <td className="p-3 text-right font-bold text-red-700">{row.damage ? row.damage.toLocaleString("id-ID") : "-"}</td>
-                                  <td className="p-3 font-bold text-slate-600">{row.targetStack}</td>
+                                  <td className="p-3 text-right font-black text-slate-900">{row.total.toLocaleString("id-ID")}</td>
                                   <td className="p-3 text-center text-[10px] font-black text-slate-500">{row.qcStatus}</td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
-                          {group.productRows.length===0 && (
+                          {group.finishedWarehouseRows.length===0 && (
                             <div className="p-6 text-center text-xs italic text-slate-400">
                               Belum ada stok produk jadi aktif untuk MO ini.
                             </div>
