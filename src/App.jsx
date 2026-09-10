@@ -1437,8 +1437,10 @@ async function generateRebaggingBatchPdf(tx, systemConfig = {}) {
     { size: 5.8 }
   );
   txt(
-    "Status mutu: " +
-      (qualityControl.qualityStatus || "SESUAI [ ]  TIDAK SESUAI [ ]  MENUNGGU [ ]"),
+    "Penyimpangan proses: " +
+      (qualityControl.processDeviation?.hasDeviation || qualityControl.deviation
+        ? "ADA"
+        : "TIDAK ADA"),
     margin + 300,
     y + 36,
     { size: 5.8, bold: true }
@@ -1466,7 +1468,7 @@ async function generateRebaggingBatchPdf(tx, systemConfig = {}) {
 
   y = section("9. PENYIMPANGAN / PRODUK TIDAK SESUAI DAN TINDAKAN KOREKSI", y, pageWidth);
   box(margin, y, pageWidth - margin * 2, 142);
-  txt("Penyimpangan / ketidaksesuaian:", margin + 4, y + 14, {
+  txt("Kejadian / penyimpangan proses:", margin + 4, y + 14, {
     size: 5.8,
     bold: true,
   });
@@ -1481,7 +1483,7 @@ async function generateRebaggingBatchPdf(tx, systemConfig = {}) {
       maxLines: 3,
     }
   );
-  txt("Tindakan koreksi / disposisi:", margin + 4, y + 68, {
+  txt("Tindakan yang dilakukan:", margin + 4, y + 68, {
     size: 5.8,
     bold: true,
   });
@@ -2176,7 +2178,7 @@ async function generateFinishedGoodsStockCardPdf({
       ["Tanggal Produksi", formatPdfDate(batchMeta.productionDate)],
       ["Tanggal Masuk Gudang", formatPdfDate(batchMeta.firstInboundDate)],
       ["Jumlah Karung/Karton", totalReceived ? `${formatStockNumber(totalReceived)} ${unitLabel}` : ""],
-      ["Lokasi Tumpukan", batchMeta.targetStack || ""],
+      ["No./Kode Tumpukan", batchMeta.targetStack || "-"],
     ];
 
     metaRows.forEach(([label, value]) => {
@@ -2456,7 +2458,7 @@ export default function App() {
     rebagTargetSkuId: "", rebagProcessingLocationId: "", rebagFinishedLocationId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
     rebagGoodQty: "", rebagProcessQty: "0", rebagDamageQty: "0",
     rebagResultTmNumber: "", rebagExpiryDate: getDefaultExpiryDate(),
-    rebagCoaNumber: "", rebagQualityStatus: "MENUNGGU",
+    rebagCoaNumber: "", rebagQualityStatus: "TIDAK_ADA_PENYIMPANGAN",
     rebagDeviation: "", rebagCorrectiveAction: "",
     outSkuId: "", outTmNumber: "", outSoNumber: "", outCustomer: "",
     useBackdate: false, backdateDateTime: ""
@@ -3219,7 +3221,6 @@ export default function App() {
           );
         }
         if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
-        if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
 
         const recipe = getRebagRecipe(targetSku, rebagRecipes);
         const weightPerPackKg = inferWeightPerPackKg(targetSku);
@@ -3582,25 +3583,38 @@ Masukkan alasan override Super Admin:`
           (material) => Number(material.damageQty || 0) > 0
         ).length;
 
-        const qualityStatus = formData.rebagQualityStatus || "MENUNGGU";
+        const processDeviationStatus =
+          formData.rebagQualityStatus === "ADA_PENYIMPANGAN"
+            ? "ADA_PENYIMPANGAN"
+            : "TIDAK_ADA_PENYIMPANGAN";
+        const hasProcessDeviation = processDeviationStatus === "ADA_PENYIMPANGAN";
         const deviation = String(formData.rebagDeviation || "").trim();
         const correctiveAction = String(formData.rebagCorrectiveAction || "").trim();
 
-        if (
-          qualityStatus === "TIDAK SESUAI" &&
-          (!deviation || !correctiveAction)
-        ) {
+        if (hasProcessDeviation && (!deviation || !correctiveAction)) {
           return alert(
-            "Jika status mutu TIDAK SESUAI, Penyimpangan dan Tindakan Koreksi wajib diisi."
+            "Jika ada penyimpangan proses, Kejadian/Penyimpangan dan Tindakan yang Dilakukan wajib diisi."
           );
         }
 
+        const processDeviationSnapshot = {
+          status: processDeviationStatus,
+          hasDeviation: hasProcessDeviation,
+          description: hasProcessDeviation ? deviation : "",
+          actionTaken: hasProcessDeviation ? correctiveAction : "",
+          recordedAt,
+          recordedBy: currentUser.username,
+        };
+
+        // Legacy qualityControl fields are retained so old PDFs/history stay readable.
+        // Final quality approval remains the responsibility of QC Produk Jadi.
         const qualityControlSnapshot = {
           coaNumber: String(formData.rebagCoaNumber || "").trim(),
-          qualityStatus,
-          deviation,
-          correctiveAction,
+          qualityStatus: "MENUNGGU_QC",
+          deviation: processDeviationSnapshot.description,
+          correctiveAction: processDeviationSnapshot.actionTaken,
           effectiveness: "",
+          processDeviation: processDeviationSnapshot,
         };
 
         const documentControlSnapshot = {
@@ -3718,6 +3732,7 @@ Masukkan alasan override Super Admin:`
               : null,
             documentControl: documentControlSnapshot,
             qualityControl: qualityControlSnapshot,
+            processDeviation: processDeviationSnapshot,
             moNumber: sourceMoNumbers.join(", "),
             sourceMoNumbers,
             sourceTmNumbers,
@@ -3821,6 +3836,7 @@ Masukkan alasan override Super Admin:`
                 : null,
               documentControl: documentControlSnapshot,
               qualityControl: qualityControlSnapshot,
+              processDeviation: processDeviationSnapshot,
               ...auditMeta,
             }
           );
@@ -7529,40 +7545,54 @@ Masukkan alasan override Super Admin:`
                               />
                             </div>
                             <div>
-                              <label className="block text-xs font-bold text-slate-600 mb-1.5">Status Mutu</label>
+                              <label className="block text-xs font-bold text-slate-600 mb-1.5">Penyimpangan Proses</label>
                               <select
                                 className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 font-bold"
                                 value={formData.rebagQualityStatus}
-                                onChange={e=>setFormData({...formData,rebagQualityStatus:e.target.value})}
+                                onChange={e=>setFormData({
+                                  ...formData,
+                                  rebagQualityStatus:e.target.value,
+                                  ...(e.target.value === "TIDAK_ADA_PENYIMPANGAN"
+                                    ? { rebagDeviation:"", rebagCorrectiveAction:"" }
+                                    : {})
+                                })}
                               >
-                                <option value="MENUNGGU">MENUNGGU VERIFIKASI</option>
-                                <option value="SESUAI">SESUAI</option>
-                                <option value="TIDAK SESUAI">TIDAK SESUAI</option>
+                                <option value="TIDAK_ADA_PENYIMPANGAN">TIDAK ADA PENYIMPANGAN</option>
+                                <option value="ADA_PENYIMPANGAN">ADA PENYIMPANGAN</option>
                               </select>
+                              <p className="mt-1.5 text-[10px] leading-4 text-slate-500">
+                                Operator hanya mencatat kejadian selama proses. Keputusan mutu akhir tetap dilakukan pada QC Produk Jadi.
+                              </p>
                             </div>
                           </div>
 
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Penyimpangan / Ketidaksesuaian</label>
-                            <textarea
-                              rows="2"
-                              className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 resize-y"
-                              value={formData.rebagDeviation}
-                              onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}
-                              placeholder="Kosongkan bila tidak ada penyimpangan."
-                            />
-                          </div>
+                          {formData.rebagQualityStatus === "ADA_PENYIMPANGAN" && (
+                            <>
+                              <div>
+                                <label className="block text-xs font-bold text-red-600 mb-1.5">Kejadian / Penyimpangan Proses</label>
+                                <textarea
+                                  rows="2"
+                                  className="w-full rounded-lg border border-red-200 bg-red-50/40 p-3 outline-none focus:border-red-500 resize-y"
+                                  value={formData.rebagDeviation}
+                                  onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}
+                                  placeholder="Jelaskan kejadian/penyimpangan yang terjadi saat proses."
+                                  required
+                                />
+                              </div>
 
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Tindakan Koreksi / Disposisi</label>
-                            <textarea
-                              rows="2"
-                              className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 resize-y"
-                              value={formData.rebagCorrectiveAction}
-                              onChange={e=>setFormData({...formData,rebagCorrectiveAction:e.target.value})}
-                              placeholder="Wajib diisi bila Status Mutu = TIDAK SESUAI."
-                            />
-                          </div>
+                              <div>
+                                <label className="block text-xs font-bold text-amber-700 mb-1.5">Tindakan yang Dilakukan</label>
+                                <textarea
+                                  rows="2"
+                                  className="w-full rounded-lg border border-amber-200 bg-amber-50/40 p-3 outline-none focus:border-amber-500 resize-y"
+                                  value={formData.rebagCorrectiveAction}
+                                  onChange={e=>setFormData({...formData,rebagCorrectiveAction:e.target.value})}
+                                  placeholder="Jelaskan tindakan langsung yang dilakukan operator."
+                                  required
+                                />
+                              </div>
+                            </>
+                          )}
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -7570,13 +7600,21 @@ Masukkan alasan override Super Admin:`
                             <label className="block text-sm font-bold text-slate-700 mb-2">Tanggal Kadaluwarsa</label>
                             <input type="date" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagExpiryDate} onChange={e=>setFormData({...formData,rebagExpiryDate:e.target.value})} required/>
                           </div>
-                          <div>
-                            <label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label>
-                            <select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData,rebagTargetStack:e.target.value})} required>
-                              <option value="">-- Pilih Lokasi Tumpukan --</option>
-                              {STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}
-                            </select>
-                          </div>
+                          {formData.rebagFinishedLocationId && (
+                            <div>
+                              <label className="block text-sm font-bold text-slate-700 mb-2">No./Kode Tumpukan Produk Jadi <span className="font-normal text-slate-400">(Opsional)</span></label>
+                              <input
+                                type="text"
+                                className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white"
+                                value={formData.rebagTargetStack}
+                                onChange={e=>setFormData({...formData,rebagTargetStack:e.target.value})}
+                                placeholder="Contoh: Tumpukan A01 / Blok 3"
+                              />
+                              <p className="mt-1.5 text-[10px] leading-4 text-slate-500">
+                                Posisi spesifik di dalam Lokasi Produk Jadi yang sudah dipilih. Kosongkan bila lokasi tersebut tidak memakai kode tumpukan.
+                              </p>
+                            </div>
+                          )}
                         </div>
                       </>
                     )}
