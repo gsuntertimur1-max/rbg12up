@@ -1,0 +1,38 @@
+name: Apply Operator Deviation Stack Preview
+
+on:
+  push:
+    branches:
+      - backup-before-dashboard-rollback-20260909
+    paths:
+      - '.github/scripts/patch_operator_deviation_stack.py'
+      - '.github/workflows/apply-operator-deviation-stack-preview.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: backup-before-dashboard-rollback-20260909
+          fetch-depth: 0
+      - name: Apply operator deviation and stack patch
+        run: python .github/scripts/patch_operator_deviation_stack.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install
+      - name: Build application
+        run: npm run build
+      - name: Commit verified application changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx
+          git diff --cached --quiet && exit 0
+          git commit -m "Simplify operator deviation and finished stack input"
+          git push origin HEAD:backup-before-dashboard-rollback-20260909
