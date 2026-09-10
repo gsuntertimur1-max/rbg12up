@@ -1,0 +1,38 @@
+name: Apply Support Material Warehouse Auto Preview
+
+on:
+  push:
+    branches:
+      - backup-before-dashboard-rollback-20260909
+    paths:
+      - ".github/workflows/apply-support-material-warehouse-auto.yml"
+      - ".github/scripts/patch_support_material_warehouse_auto.py"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: backup-before-dashboard-rollback-20260909
+          fetch-depth: 0
+      - name: Apply support material warehouse patch
+        run: python .github/scripts/patch_support_material_warehouse_auto.py
+      - name: Install dependencies
+        run: npm install
+      - name: Build application
+        run: npm run build
+      - name: Commit verified application changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx
+          if git diff --cached --quiet; then
+            echo "No application changes."
+            exit 0
+          fi
+          git commit -m "Auto assign support materials to processing warehouse"
+          git push origin backup-before-dashboard-rollback-20260909
