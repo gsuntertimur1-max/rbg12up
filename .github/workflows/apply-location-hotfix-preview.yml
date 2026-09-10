@@ -1,0 +1,39 @@
+name: Apply Location Model Hotfix Preview
+
+on:
+  push:
+    branches:
+      - backup-before-dashboard-rollback-20260909
+    paths:
+      - ".github/workflows/apply-location-hotfix-preview.yml"
+      - ".github/scripts/patch_location_model_hotfix.py"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: backup-before-dashboard-rollback-20260909
+          fetch-depth: 0
+      - name: Apply location hotfix
+        run: python .github/scripts/patch_location_model_hotfix.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run build
+      - name: Commit verified application changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx
+          if git diff --cached --quiet; then
+            echo "No application changes."
+            exit 0
+          fi
+          git commit -m "Scope FEFO by process location and handle support moves"
+          git push origin backup-before-dashboard-rollback-20260909
