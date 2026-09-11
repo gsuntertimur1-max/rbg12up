@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import { jsPDF } from "jspdf";
+import { DEFAULT_LOGO_SRC } from "./logoData";
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp, getApps, getApp } from "firebase/app";
@@ -24,7 +25,7 @@ const STACK_LOCATIONS = ["Unit Pengolahan 20", "RTR 60", "Gula 17"];
 
 const DEFAULT_SYSTEM_CONFIG = {
   name: "Sistem Rebagging Terpadu",
-  logo: null,
+  logo: "/logo.png",
   rebagDocumentCode: "",
   rebagDocumentRevision: "",
   rebagDocumentEffectiveDate: "",
@@ -35,6 +36,11 @@ const DEFAULT_SYSTEM_CONFIG = {
   rebagScaleCalibrationDue: "",
   rebagApproverName: "IRSA MAULIAN NUGRAHA",
   processingLocation: "Unit Pengolahan 20",
+};
+
+const resolveLogoSource = (value) => {
+  const logo = String(value || "").trim();
+  return !logo || logo === "/logo.png" ? DEFAULT_LOGO_SRC : logo;
 };
 
 const DEFAULT_LOCATIONS = [
@@ -592,7 +598,7 @@ function loadPdfLogo() {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = reject;
-    img.src = "/logo.png";
+    img.src = resolveLogoSource("/logo.png");
   });
 }
 
@@ -6323,9 +6329,9 @@ Masukkan alasan override Super Admin:`
               </div>
 
               <div className="mt-10">
-                {systemConfig.logo ? (
+                {resolveLogoSource(systemConfig.logo) ? (
                   <div className="inline-flex rounded-2xl bg-white p-4 shadow-2xl shadow-black/20">
-                    <img src={systemConfig.logo} alt="Logo" className="h-14 w-auto object-contain" />
+                    <img src={resolveLogoSource(systemConfig.logo)} alt="Logo" className="h-14 w-auto object-contain" />
                   </div>
                 ) : (
                   <div className="inline-flex h-20 w-20 items-center justify-center rounded-2xl bg-red-600 shadow-xl shadow-red-950/40">
@@ -6360,9 +6366,9 @@ Masukkan alasan override Super Admin:`
             <div className="mx-auto w-full max-w-md">
               <div className="mb-8 lg:hidden">
                 <div className="flex items-center gap-4">
-                  {systemConfig.logo ? (
+                  {resolveLogoSource(systemConfig.logo) ? (
                     <div className="flex h-16 min-w-16 items-center justify-center rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-                      <img src={systemConfig.logo} alt="Logo" className="max-h-11 w-auto object-contain" />
+                      <img src={resolveLogoSource(systemConfig.logo)} alt="Logo" className="max-h-11 w-auto object-contain" />
                     </div>
                   ) : (
                     <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-600 text-white shadow-lg shadow-red-100">
@@ -6465,9 +6471,9 @@ Masukkan alasan override Super Admin:`
       {/* HEADER KHUSUS MOBILE (HP) */}
       <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center z-40 sticky top-0 shadow-md">
         <div className="flex items-center gap-3">
-          {systemConfig.logo ? (
+          {resolveLogoSource(systemConfig.logo) ? (
              <div className="bg-white p-1.5 rounded w-12 h-10 flex items-center justify-center">
-                <img src={systemConfig.logo} alt="logo" className="w-full h-full object-contain" />
+                <img src={resolveLogoSource(systemConfig.logo)} alt="logo" className="w-full h-full object-contain" />
              </div>
           ) : (
              <Package size={28} />
@@ -6489,9 +6495,9 @@ Masukkan alasan override Super Admin:`
         
         {/* LOGO DI DESKTOP */}
         <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-5 text-center hidden md:flex mt-2">
-          {systemConfig.logo ? (
+          {resolveLogoSource(systemConfig.logo) ? (
             <div className="bg-white p-2.5 rounded-2xl w-10/12 flex justify-center shadow-lg hover:scale-105 transition-transform duration-300">
-               <img src={systemConfig.logo} alt="logo" className="h-12 w-auto object-contain" />
+               <img src={resolveLogoSource(systemConfig.logo)} alt="logo" className="h-12 w-auto object-contain" />
             </div>
           ) : (
             <Package size={36} />
