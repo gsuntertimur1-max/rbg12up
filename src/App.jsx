@@ -34,6 +34,17 @@ const DEFAULT_SYSTEM_CONFIG = {
   rebagScaleId: "",
   rebagScaleCalibrationDue: "",
   rebagApproverName: "IRSA MAULIAN NUGRAHA",
+  cppobBusinessLicenseNumber: "912030791310401280004",
+  cppobPermitNumber: "PW-S.04.09.1.53.53207.26-2270.P",
+  cppobIssuedDate: "2026-07-30",
+  cppobValidUntil: "2031-07-22",
+  cppobScope: "Gula dan Pemanis",
+  sniCertificateNumber: "PSN-SNI04-8-26-33",
+  sniStandard: "SNI 3140.3:2020",
+  sniProduct: "Gula Kristal - Bagian 3: Putih",
+  sniBrand: "Maniskita",
+  sniIssuedDate: "2026-07-30",
+  sniValidUntil: "2030-07-29",
 };
 
 const DEFAULT_LOCATIONS = [
@@ -147,7 +158,7 @@ const getRebagStandards = (productName = "") => {
     prpCommon: "ISO 22002-100:2025",
     cppob: "CPPOB - PerBPOM No. 22 Tahun 2021",
     productQuality: upperName.includes("GULA")
-      ? "SNI 3140.3:2010/Amd1:2011 - Gula kristal, Bagian 3: Putih"
+      ? "SNI 3140.3:2020 - Gula kristal, Bagian 3: Putih"
       : "Spesifikasi internal / COA produk yang berlaku",
   };
 };
@@ -8148,7 +8159,70 @@ Masukkan alasan override Super Admin:`
                     </div>
 
                     <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-600">
-                      <span className="font-black text-slate-800">Acuan tetap pada PDF:</span> SNI ISO 22000:2018 + Amd1:2024; ISO 22002-1:2025; ISO 22002-100:2025; CPPOB - PerBPOM No. 22 Tahun 2021. Untuk produk gula, PDF juga mencantumkan SNI 3140.3:2010/Amd1:2011.
+                      <span className="font-black text-slate-800">Acuan tetap pada PDF:</span> SNI ISO 22000:2018 + Amd1:2024; ISO 22002-1:2025; ISO 22002-100:2025; CPPOB - PerBPOM No. 22 Tahun 2021. Untuk produk gula, PDF juga mencantumkan SNI 3140.3:2020.
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 space-y-4">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-[0.14em] text-emerald-700">Legalitas & Sertifikasi</div>
+                      <h4 className="mt-1 font-black text-slate-900">CPPOB & Sertifikat SNI Produk</h4>
+                    </div>
+
+                    <div className="rounded-xl border border-emerald-200 bg-white p-4 space-y-3">
+                      <div className="text-xs font-black uppercase tracking-wider text-emerald-700">Izin Penerapan CPPOB</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nomor PB-UMKU</label>
+                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobBusinessLicenseNumber || ""} onChange={e=>setSystemConfig({...systemConfig,cppobBusinessLicenseNumber:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nomor Izin CPPOB</label>
+                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobPermitNumber || ""} onChange={e=>setSystemConfig({...systemConfig,cppobPermitNumber:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Tanggal Terbit</label>
+                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobIssuedDate || ""} onChange={e=>setSystemConfig({...systemConfig,cppobIssuedDate:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Berlaku s.d.</label>
+                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobValidUntil || ""} onChange={e=>setSystemConfig({...systemConfig,cppobValidUntil:e.target.value})}/>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Ruang Lingkup / Jenis Pangan</label>
+                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobScope || ""} onChange={e=>setSystemConfig({...systemConfig,cppobScope:e.target.value})}/>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-blue-200 bg-white p-4 space-y-3">
+                      <div className="text-xs font-black uppercase tracking-wider text-blue-700">Sertifikat SNI Produk</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nomor Sertifikat</label>
+                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniCertificateNumber || ""} onChange={e=>setSystemConfig({...systemConfig,sniCertificateNumber:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Standar SNI</label>
+                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniStandard || ""} onChange={e=>setSystemConfig({...systemConfig,sniStandard:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nama Produk</label>
+                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniProduct || ""} onChange={e=>setSystemConfig({...systemConfig,sniProduct:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Merek</label>
+                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniBrand || ""} onChange={e=>setSystemConfig({...systemConfig,sniBrand:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Tanggal Terbit</label>
+                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniIssuedDate || ""} onChange={e=>setSystemConfig({...systemConfig,sniIssuedDate:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Berlaku s.d.</label>
+                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniValidUntil || ""} onChange={e=>setSystemConfig({...systemConfig,sniValidUntil:e.target.value})}/>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
