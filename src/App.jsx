@@ -4,7 +4,7 @@ import {
   FileDown, FileUp, ArrowRightLeft, Settings, Users,
   ArrowRight, Settings2, Database, History, LogOut,
   Boxes, FileSpreadsheet, Search, CheckCircle, Image as ImageIcon, PlusCircle, Eye,
-  Menu, X, LogIn, UserRound, LockKeyhole, ClipboardList, ShieldAlert
+  Menu, X, LogIn, UserRound, LockKeyhole, ClipboardList, ShieldAlert, Scale
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, LineChart, Line,
@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import { jsPDF } from "jspdf";
+import { DEFAULT_LOGO_SRC } from "./logoData";
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp, getApps, getApp } from "firebase/app";
@@ -24,7 +25,7 @@ const STACK_LOCATIONS = ["Unit Pengolahan 20", "RTR 60", "Gula 17"];
 
 const DEFAULT_SYSTEM_CONFIG = {
   name: "Sistem Rebagging Terpadu",
-  logo: null,
+  logo: "/logo.png",
   rebagDocumentCode: "",
   rebagDocumentRevision: "",
   rebagDocumentEffectiveDate: "",
@@ -34,7 +35,109 @@ const DEFAULT_SYSTEM_CONFIG = {
   rebagScaleId: "",
   rebagScaleCalibrationDue: "",
   rebagApproverName: "IRSA MAULIAN NUGRAHA",
+  processingLocation: "Unit Pengolahan 20",
 };
+
+const resolveLogoSource = (value) => {
+  const logo = String(value || "").trim();
+  return !logo || logo === "/logo.png" ? DEFAULT_LOGO_SRC : logo;
+};
+
+const DEFAULT_LOCATIONS = [
+  {
+    id: "UP17",
+    code: "UP 17",
+    name: "Unit Gudang 17 (UP 17)",
+    type: "UP",
+    functions: ["STORAGE", "REBAG_GULA"],
+    active: true,
+  },
+  {
+    id: "UP20",
+    code: "UP 20",
+    name: "Unit Gudang 20 (UP 20)",
+    type: "UP",
+    functions: ["STORAGE", "REBAG_BERAS"],
+    active: true,
+  },
+  {
+    id: "RTR60",
+    code: "RTR 60",
+    name: "RTR (60)",
+    type: "RTR",
+    functions: ["STORAGE", "REBAG_GULA", "REBAG_BERAS"],
+    active: true,
+  },
+  {
+    id: "MULTIPURPOSE",
+    code: "MULTI PURPOSE",
+    name: "Gudang Multi Purpose",
+    type: "MULTI_PURPOSE",
+    functions: ["STORAGE", "REBAG_GULA", "REBAG_BERAS"],
+    active: true,
+  },
+];
+
+const getLocationDisplayName = (location) =>
+  String(location?.name || location?.code || location?.id || "").trim();
+
+const locationSupportsRebag = (location, targetSku) => {
+  if (!location || location.active === false) return false;
+  const functions = Array.isArray(location.functions) ? location.functions : [];
+  const name = String(targetSku?.name || "").toUpperCase();
+  if (name.includes("GULA")) return functions.includes("REBAG_GULA");
+  if (name.includes("BERAS") || name.includes("FORTIVIT")) {
+    return functions.includes("REBAG_BERAS");
+  }
+  return functions.includes("REBAG_GULA") || functions.includes("REBAG_BERAS");
+};
+
+const locationSupportsStorage = (location) =>
+  Boolean(location && location.active !== false && (location.functions || []).includes("STORAGE"));
+
+const MATERIAL_SUPPORT_KEYWORDS = [
+  "KEMASAN",
+  "KARDUS",
+  "KARTON",
+  "PLASTIK",
+  "PACKAGING",
+  "LABEL",
+  "BENANG",
+  "ROLL",
+  "SHEET",
+];
+
+const isPackagingMaterialSku = (sku) => {
+  const name = String(sku?.name || "").toUpperCase();
+  return MATERIAL_SUPPORT_KEYWORDS.some((keyword) => name.includes(keyword));
+};
+
+const isPrimaryAdministrativeRawSku = (sku) => {
+  if (!sku || sku.type !== "bulk") return false;
+  const name = String(sku.name || "").toUpperCase();
+  const isMainCommodity = name.includes("BERAS") || name.includes("GULA");
+  return isMainCommodity && !isPackagingMaterialSku(sku);
+};
+
+const getProcessingLocation = (config = {}) =>
+  String(config.processingLocation || "Unit Pengolahan 20").trim() ||
+  "Unit Pengolahan 20";
+
+const getBatchAdministrativeWarehouse = (batch, sku, config = {}) => {
+  if (batch?.administrativeWarehouse) {
+    return String(batch.administrativeWarehouse).trim();
+  }
+  if (isPackagingMaterialSku(sku)) return getProcessingLocation(config);
+  return String(batch?.sourceWarehouse || getProcessingLocation(config)).trim();
+};
+
+const getBatchPhysicalLocation = (batch, config = {}) =>
+  String(
+    batch?.physicalLocationName ||
+    batch?.physicalLocation ||
+    batch?.sourceWarehouse ||
+    getProcessingLocation(config)
+  ).trim() || getProcessingLocation(config);
 
 const getRebagStandards = (productName = "") => {
   const upperName = String(productName || "").toUpperCase();
@@ -54,6 +157,24 @@ const DEFAULT_USERS = [
   { username: "admin", password: "123456", role: "Admin" },
   { username: "operator", password: "123456", role: "Operator" },
 ];
+
+// Hak proses per role. Super Admin sengaja tidak dimasukkan agar aksesnya tetap penuh.
+const ROLE_PROCESS_PERMISSIONS = {
+  admin: ["inbound", "rebagging", "mutation", "outbound"],
+  operator: ["rebagging"],
+  qc: ["qc"],
+  viewer: [],
+};
+
+const normalizeRole = (role) =>
+  String(role || "").trim().toLowerCase();
+
+const OPERATION_PERMISSION_BY_TAB = {
+  inbound: "inbound",
+  rebagging: "rebagging",
+  internal_move: "mutation",
+  outbound: "outbound",
+};
 
 const DEFAULT_REBAG_RECIPES = [
   {
@@ -262,8 +383,10 @@ const createInitialQcForm = (type = "incoming") => {
     (isIncoming ? QC_INCOMING_CHECKS : QC_FINISHED_CHECKS).map(([key]) => [key, true])
   );
   return {
+    moNumber: "",
     batchId: "",
     decision: isIncoming ? "ACCEPT" : "RELEASE",
+    resultTmNumber: "",
     coaNumber: "",
     inspectionNote: "",
     nonconformity: "",
@@ -475,7 +598,7 @@ function loadPdfLogo() {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = reject;
-    img.src = "/logo.png";
+    img.src = resolveLogoSource("/logo.png");
   });
 }
 
@@ -1338,8 +1461,10 @@ async function generateRebaggingBatchPdf(tx, systemConfig = {}) {
     { size: 5.8 }
   );
   txt(
-    "Status mutu: " +
-      (qualityControl.qualityStatus || "SESUAI [ ]  TIDAK SESUAI [ ]  MENUNGGU [ ]"),
+    "Penyimpangan proses: " +
+      (qualityControl.processDeviation?.hasDeviation || qualityControl.deviation
+        ? "ADA"
+        : "TIDAK ADA"),
     margin + 300,
     y + 36,
     { size: 5.8, bold: true }
@@ -1367,7 +1492,7 @@ async function generateRebaggingBatchPdf(tx, systemConfig = {}) {
 
   y = section("9. PENYIMPANGAN / PRODUK TIDAK SESUAI DAN TINDAKAN KOREKSI", y, pageWidth);
   box(margin, y, pageWidth - margin * 2, 142);
-  txt("Penyimpangan / ketidaksesuaian:", margin + 4, y + 14, {
+  txt("Kejadian / penyimpangan proses:", margin + 4, y + 14, {
     size: 5.8,
     bold: true,
   });
@@ -1382,7 +1507,7 @@ async function generateRebaggingBatchPdf(tx, systemConfig = {}) {
       maxLines: 3,
     }
   );
-  txt("Tindakan koreksi / disposisi:", margin + 4, y + 68, {
+  txt("Tindakan yang dilakukan:", margin + 4, y + 68, {
     size: 5.8,
     bold: true,
   });
@@ -2077,7 +2202,7 @@ async function generateFinishedGoodsStockCardPdf({
       ["Tanggal Produksi", formatPdfDate(batchMeta.productionDate)],
       ["Tanggal Masuk Gudang", formatPdfDate(batchMeta.firstInboundDate)],
       ["Jumlah Karung/Karton", totalReceived ? `${formatStockNumber(totalReceived)} ${unitLabel}` : ""],
-      ["Lokasi Tumpukan", batchMeta.targetStack || ""],
+      ["No./Kode Tumpukan", batchMeta.targetStack || "-"],
     ];
 
     metaRows.forEach(([label, value]) => {
@@ -2324,6 +2449,7 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
   const [inventoryBatches, setInventoryBatches] = useState([]);
   const [qcRecords, setQcRecords] = useState([]);
+  const [locations, setLocations] = useState(DEFAULT_LOCATIONS);
   const [rebagRecipes, setRebagRecipes] = useState(DEFAULT_REBAG_RECIPES);
   const [systemConfig, setSystemConfig] = useState(DEFAULT_SYSTEM_CONFIG);
   
@@ -2353,17 +2479,17 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const initialFormData = {
-    rebagTargetSkuId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
+    rebagTargetSkuId: "", rebagProcessingLocationId: "", rebagFinishedLocationId: "", rebagTargetStack: "", bulkSkuId: "", bulkBatchId: "", qtyToProcess: "",
     rebagGoodQty: "", rebagProcessQty: "0", rebagDamageQty: "0",
     rebagResultTmNumber: "", rebagExpiryDate: getDefaultExpiryDate(),
-    rebagCoaNumber: "", rebagQualityStatus: "MENUNGGU",
+    rebagCoaNumber: "", rebagQualityStatus: "TIDAK_ADA_PENYIMPANGAN",
     rebagDeviation: "", rebagCorrectiveAction: "",
     outSkuId: "", outTmNumber: "", outSoNumber: "", outCustomer: "",
     useBackdate: false, backdateDateTime: ""
   };
   const [formData, setFormData] = useState(initialFormData);
   const [inboundLines, setInboundLines] = useState([
-    { rowId: "IN-1", skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }
+    { rowId: "IN-1", skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "", physicalLocationId: "" }
   ]);
   const [outboundSelections, setOutboundSelections] = useState({});
   const [rebagMaterialSelections, setRebagMaterialSelections] = useState({});
@@ -2375,6 +2501,20 @@ export default function App() {
 
   const [newSku, setNewSku] = useState({ id: "", name: "", type: "bulk", unit: "KG", weightPerPackKg: "" });
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "Operator" });
+  const [locationForm, setLocationForm] = useState({
+    id: "",
+    code: "",
+    name: "",
+    type: "GBB",
+    functions: ["STORAGE"],
+    active: true,
+  });
+  const [internalMoveForm, setInternalMoveForm] = useState({
+    batchId: "",
+    qty: "",
+    destinationLocationId: "",
+    reason: "",
+  });
   const [editingRecipeId, setEditingRecipeId] = useState("");
   const [recipeForm, setRecipeForm] = useState({
     targetSku: "",
@@ -2456,6 +2596,35 @@ export default function App() {
       handleDbError("stok batch")
     );
 
+    const unsubLocations = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "locations"),
+      (snap) => {
+        if (snap.empty) {
+          setLocations(DEFAULT_LOCATIONS);
+          Promise.all(
+            DEFAULT_LOCATIONS.map((location) =>
+              setDoc(
+                doc(db, "artifacts", appId, "public", "data", "locations", location.id),
+                location
+              )
+            )
+          ).catch(handleDbError("inisialisasi master lokasi"));
+        } else {
+          setLocations(
+            snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .sort((a, b) =>
+                getLocationDisplayName(a).localeCompare(getLocationDisplayName(b), undefined, {
+                  numeric: true,
+                  sensitivity: "base",
+                })
+              )
+          );
+        }
+      },
+      handleDbError("master lokasi")
+    );
+
     const unsubRecipes = onSnapshot(
       collection(db, "artifacts", appId, "public", "data", "recipes"),
       (snap) => {
@@ -2516,6 +2685,7 @@ export default function App() {
       unsubUsers();
       unsubSkus();
       unsubBatches();
+      unsubLocations();
       unsubRecipes();
       unsubTx();
       unsubQc();
@@ -2565,6 +2735,51 @@ export default function App() {
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
+  const canPerform = (permission) => {
+    const role = normalizeRole(currentUser?.role);
+    return Boolean(
+      currentUser &&
+      (role === "super admin" ||
+        ROLE_PROCESS_PERMISSIONS[role]?.includes(permission))
+    );
+  };
+  const canAccessOperations = () =>
+    Object.values(OPERATION_PERMISSION_BY_TAB).some((permission) =>
+      canPerform(permission)
+    );
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role === "Viewer") return;
+    const savedUser = users.find((user) => user.username === currentUser.username);
+    if (!savedUser || savedUser.role === currentUser.role) return;
+    const refreshedSession = {
+      username: savedUser.username,
+      role: savedUser.role,
+    };
+    setCurrentUser(refreshedSession);
+    localStorage.setItem("rebagging_session", JSON.stringify(refreshedSession));
+  }, [users, currentUser?.username, currentUser?.role]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    if (activeMenu === "operations") {
+      const allowedTabs = Object.entries(OPERATION_PERMISSION_BY_TAB)
+        .filter(([, permission]) => canPerform(permission))
+        .map(([tab]) => tab);
+
+      if (allowedTabs.length === 0) {
+        setActiveMenu("dashboard");
+      } else if (!allowedTabs.includes(activeOpTab)) {
+        setActiveOpTab(allowedTabs[0]);
+      }
+    }
+
+    if (activeMenu === "qc" && !canPerform("qc")) {
+      setActiveMenu("dashboard");
+    }
+  }, [currentUser?.role, activeMenu, activeOpTab]);
+
   const isVerifiedSuperAdmin = Boolean(
     currentUser?.role === "Super Admin" &&
     users.some(
@@ -2575,6 +2790,74 @@ export default function App() {
   const selectedRebagTargetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
   const activeRebagRecipe = getRebagRecipe(selectedRebagTargetSku, rebagRecipes);
   const activeRebagMaterials = normalizeRecipeMaterials(activeRebagRecipe);
+
+  const incomingQcMoGroups = useMemo(() => {
+    const unresolvedStatuses = new Set(["PENDING_QC", "HOLD", "REJECTED"]);
+    const groups = {};
+
+    inventoryBatches.forEach((batch) => {
+      const sku = skus.find((item) => item.id === batch.skuId);
+      if (
+        sku?.type !== "bulk" ||
+        Number(batch.currentQty || 0) <= 0 ||
+        !unresolvedStatuses.has(batch.qcStatus)
+      ) return;
+
+      const moNumber = String(batch.moNumber || "").trim();
+      if (!moNumber) return;
+
+      if (!groups[moNumber]) {
+        groups[moNumber] = {
+          moNumber,
+          items: [],
+          tmNumbers: new Set(),
+          latestAt: 0,
+        };
+      }
+
+      const item = {
+        batchId: batch.batchId,
+        skuId: batch.skuId,
+        skuName: sku?.name || batch.skuId || "",
+        unit: sku?.unit || "",
+        tmNumber: batch.tmNumber || "",
+        administrativeWarehouse:
+          batch.administrativeWarehouse ||
+          getBatchAdministrativeWarehouse(batch, sku, systemConfig) || "",
+        physicalLocation: getBatchPhysicalLocation(batch, systemConfig) || "",
+        expiryDate: batch.expiryDate || "",
+        qtySnapshot: Number(batch.currentQty || 0),
+        qcStatus: batch.qcStatus || "PENDING_QC",
+      };
+
+      groups[moNumber].items.push(item);
+      if (item.tmNumber) groups[moNumber].tmNumbers.add(item.tmNumber);
+      groups[moNumber].latestAt = Math.max(
+        groups[moNumber].latestAt,
+        new Date(batch.date || 0).getTime() || 0
+      );
+    });
+
+    return Object.values(groups)
+      .map((group) => ({
+        ...group,
+        tmNumbers: [...group.tmNumbers].sort((a, b) =>
+          String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" })
+        ),
+        items: group.items.sort((a, b) => {
+          const tmCompare = String(a.tmNumber).localeCompare(String(b.tmNumber), undefined, {
+            numeric: true,
+            sensitivity: "base",
+          });
+          if (tmCompare !== 0) return tmCompare;
+          return String(a.skuName).localeCompare(String(b.skuName), undefined, {
+            numeric: true,
+            sensitivity: "base",
+          });
+        }),
+      }))
+      .sort((a, b) => b.latestAt - a.latestAt);
+  }, [inventoryBatches, skus, systemConfig]);
 
   const outboundSelectedSku = skus.find((s) => s.id === formData.outSkuId);
   const outboundIsFinishedGoods = outboundSelectedSku?.type === "rebagged";
@@ -2606,6 +2889,7 @@ export default function App() {
         moNumber: "",
         tmNumber: "",
         sourceWarehouse: "",
+        physicalLocationId: "",
       },
     ]);
   };
@@ -2621,7 +2905,7 @@ export default function App() {
       const next = prev.filter((line) => line.rowId !== rowId);
       return next.length > 0
         ? next
-        : [{ rowId: `IN-${Date.now()}`, skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }];
+        : [{ rowId: `IN-${Date.now()}`, skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "", physicalLocationId: "" }];
     });
   };
 
@@ -2629,6 +2913,8 @@ export default function App() {
     setFormData((prev) => ({
       ...prev,
       rebagTargetSkuId: value,
+      rebagProcessingLocationId: "",
+      rebagFinishedLocationId: "",
       bulkSkuId: "",
       bulkBatchId: "",
       rebagResultTmNumber: "",
@@ -2741,13 +3027,109 @@ export default function App() {
   const handleLogout = () => { setCurrentUser(null); localStorage.removeItem("rebagging_session"); setActiveMenu("dashboard"); };
 
   const handleNavClick = (menuName) => {
+    if (menuName === "operations") {
+      const allowedTabs = Object.entries(OPERATION_PERMISSION_BY_TAB)
+        .filter(([, permission]) => canPerform(permission))
+        .map(([tab]) => tab);
+      if (allowedTabs.length === 0) {
+        return alert("Anda tidak memiliki akses proses operasional.");
+      }
+      if (!allowedTabs.includes(activeOpTab)) {
+        setActiveOpTab(allowedTabs[0]);
+      }
+    }
+    if (menuName === "qc" && !canPerform("qc")) {
+      return alert("Anda tidak memiliki akses proses Quality Control.");
+    }
     setActiveMenu(menuName);
     setIsSidebarOpen(false);
+  };
+
+  const resetLocationForm = () => {
+    setLocationForm({
+      id: "",
+      code: "",
+      name: "",
+      type: "GBB",
+      functions: ["STORAGE"],
+      active: true,
+    });
+  };
+
+  const handleLocationFunctionToggle = (functionId) => {
+    setLocationForm((prev) => {
+      const current = Array.isArray(prev.functions) ? prev.functions : [];
+      const next = current.includes(functionId)
+        ? current.filter((item) => item !== functionId)
+        : [...current, functionId];
+      return { ...prev, functions: next };
+    });
+  };
+
+  const handleSaveLocation = async (e) => {
+    e.preventDefault();
+    if (!isVerifiedSuperAdmin) return alert("Master Lokasi hanya dapat diubah oleh Super Admin.");
+    const code = String(locationForm.code || "").trim();
+    const name = String(locationForm.name || "").trim();
+    if (!code || !name) return alert("Kode dan Nama Lokasi wajib diisi.");
+    if (!Array.isArray(locationForm.functions) || locationForm.functions.length === 0) {
+      return alert("Pilih minimal satu fungsi lokasi.");
+    }
+
+    const id = locationForm.id || getStableDocId(code);
+    await setDoc(
+      doc(db, "artifacts", appId, "public", "data", "locations", id),
+      {
+        id,
+        code,
+        name,
+        type: locationForm.type || "GBB",
+        functions: locationForm.functions,
+        active: locationForm.active !== false,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.username,
+      },
+      { merge: true }
+    );
+    showNotif(locationForm.id ? "Master Lokasi diperbarui" : "Master Lokasi ditambahkan");
+    resetLocationForm();
+  };
+
+  const handleEditLocation = (location) => {
+    setLocationForm({
+      id: location.id,
+      code: location.code || "",
+      name: location.name || "",
+      type: location.type || "GBB",
+      functions: Array.isArray(location.functions) ? location.functions : ["STORAGE"],
+      active: location.active !== false,
+    });
+  };
+
+  const handleDeleteLocation = async (location) => {
+    if (!isVerifiedSuperAdmin) return;
+    const used = inventoryBatches.some(
+      (batch) =>
+        batch.physicalLocationId === location.id ||
+        batch.processingLocationId === location.id ||
+        batch.finishedLocationId === location.id
+    );
+    if (used) {
+      return alert("Lokasi sudah dipakai pada stok/transaksi. Nonaktifkan lokasi daripada menghapusnya.");
+    }
+    if (!window.confirm(`Hapus lokasi ${getLocationDisplayName(location)}?`)) return;
+    await deleteDoc(doc(db, "artifacts", appId, "public", "data", "locations", location.id));
+    showNotif("Master Lokasi dihapus");
+    if (locationForm.id === location.id) resetLocationForm();
   };
 
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
 
+    const requiredPermission = OPERATION_PERMISSION_BY_TAB[activeOpTab];
+    if (!requiredPermission || !canPerform(requiredPermission)) {
+      return alert("Anda tidak memiliki hak akses untuk proses ini.");
+    }
     if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
 
     const timestamp = Date.now();
@@ -2782,14 +3164,27 @@ export default function App() {
 
     try {
       if (activeOpTab === "inbound") {
-        const normalizedLines = inboundLines.map((line) => ({
-          ...line,
-          sku: skus.find((s) => s.id === line.skuId),
-          qtyValue: Number(line.qty),
-          moNumber: String(line.moNumber || "").trim(),
-          tmNumber: String(line.tmNumber || "").trim(),
-          sourceWarehouse: String(line.sourceWarehouse || "").trim(),
-        }));
+        const normalizedLines = inboundLines.map((line) => {
+          const sku = skus.find((s) => s.id === line.skuId);
+          const supportMaterial = isPackagingMaterialSku(sku);
+          const physicalLocation = locations.find(
+            (location) => location.id === line.physicalLocationId && location.active !== false
+          );
+          const physicalLocationName = getLocationDisplayName(physicalLocation);
+          return {
+            ...line,
+            sku,
+            supportMaterial,
+            physicalLocation,
+            physicalLocationName,
+            qtyValue: Number(line.qty),
+            moNumber: String(line.moNumber || "").trim(),
+            tmNumber: String(line.tmNumber || "").trim(),
+            sourceWarehouse: supportMaterial
+              ? physicalLocationName
+              : String(line.sourceWarehouse || "").trim(),
+          };
+        });
 
         if (normalizedLines.length === 0) {
           return alert("Tambahkan minimal satu SKU bahan.");
@@ -2805,7 +3200,8 @@ export default function App() {
           }
           if (!line.moNumber) return alert(`${rowLabel}: No. MO wajib diisi.`);
           if (!line.tmNumber) return alert(`${rowLabel}: No. TM bahan wajib diisi.`);
-          if (!line.sourceWarehouse) return alert(`${rowLabel}: gudang asal wajib diisi.`);
+          if (!line.physicalLocation) return alert(`${rowLabel}: Lokasi Fisik wajib dipilih dari Master Lokasi.`);
+          if (!line.sourceWarehouse) return alert(`${rowLabel}: Gudang Administrasi wajib diisi.`);
         }
 
         const receiptGroupId = `IN-GRP-${timestamp}`;
@@ -2814,6 +3210,16 @@ export default function App() {
         normalizedLines.forEach((line, index) => {
           const batchId = `INB-${timestamp}-${index + 1}`;
           const txId = `TRX-${timestamp}-IN-${index + 1}`;
+          const physicalLocation = line.physicalLocationName;
+          const physicalLocationId = line.physicalLocation.id;
+          const administrativeWarehouse = line.supportMaterial
+            ? physicalLocation
+            : line.sourceWarehouse;
+          const materialClass = isPackagingMaterialSku(line.sku)
+            ? "SUPPORT"
+            : isPrimaryAdministrativeRawSku(line.sku)
+            ? "PRIMARY_RAW"
+            : "OTHER_RAW";
 
           batch.set(
             doc(db, "artifacts", appId, "public", "data", "batches", batchId),
@@ -2824,6 +3230,11 @@ export default function App() {
               initialQty: line.qtyValue,
               currentQty: line.qtyValue,
               sourceWarehouse: line.sourceWarehouse,
+              administrativeWarehouse,
+              physicalLocationId,
+              physicalLocation,
+              physicalLocationName: physicalLocation,
+              materialClass,
               moNumber: line.moNumber,
               tmNumber: line.tmNumber,
               qcStatus: "PENDING_QC",
@@ -2846,6 +3257,11 @@ export default function App() {
               unit: line.sku.unit,
               operator: currentUser.username,
               sourceWarehouse: line.sourceWarehouse,
+              administrativeWarehouse,
+              physicalLocationId,
+              physicalLocation,
+              physicalLocationName: physicalLocation,
+              materialClass,
               moNumber: line.moNumber,
               tmNumber: line.tmNumber,
               batchId,
@@ -2863,12 +3279,23 @@ export default function App() {
         const processQty = Number(formData.rebagProcessQty || 0);
         const damageQty = Number(formData.rebagDamageQty || 0);
         const totalResultQty = goodQty + processQty + damageQty;
-        const resultTmNumber = String(formData.rebagResultTmNumber || "").trim();
+        // TM Hasil adalah data administrasi dan diisi pada QC Produk Jadi.
+        const resultTmNumber = "";
 
         if (!targetSku) return alert("Pilih SKU hasil rebagging.");
-        if (!resultTmNumber) return alert("TM Hasil wajib diisi pada proses Rebagging.");
-
-        const normalizedResultTm = resultTmNumber.toUpperCase();
+        const processingLocation = locations.find(
+          (location) => location.id === formData.rebagProcessingLocationId && location.active !== false
+        );
+        const finishedLocation = locations.find(
+          (location) => location.id === formData.rebagFinishedLocationId && location.active !== false
+        );
+        if (!processingLocation) return alert("Pilih Lokasi Proses Rebagging.");
+        if (!locationSupportsRebag(processingLocation, targetSku)) {
+          return alert(`Lokasi ${getLocationDisplayName(processingLocation)} belum diizinkan untuk proses produk ${targetSku.name}. Atur fungsi lokasi di Master Lokasi.`);
+        }
+        if (!finishedLocation || !locationSupportsStorage(finishedLocation)) {
+          return alert("Pilih Lokasi Produk Jadi yang aktif dan memiliki fungsi Penyimpanan.");
+        }
         if (!Number.isFinite(qty) || qty <= 0) return alert("Kuantitas hasil yang diproses harus lebih dari 0.");
         if (
           ![goodQty, processQty, damageQty].every((value) => Number.isFinite(value) && value >= 0)
@@ -2881,7 +3308,6 @@ export default function App() {
           );
         }
         if (!formData.rebagExpiryDate) return alert("Tanggal kedaluwarsa wajib diisi.");
-        if (!formData.rebagTargetStack) return alert("Pilih lokasi tumpukan tujuan.");
 
         const recipe = getRebagRecipe(targetSku, rebagRecipes);
         const weightPerPackKg = inferWeightPerPackKg(targetSku);
@@ -2933,11 +3359,17 @@ export default function App() {
 
             const referenceDate = new Date(date);
             const candidateBatches = sortBatchesFefoFifo(
-              inventoryBatches.filter(
-                (batch) =>
-                  batch.skuId === materialSkuId &&
-                  Number(batch.currentQty || 0) > 0
-              ),
+              inventoryBatches.filter((batch) => {
+                if (!(batch.skuId === materialSkuId && Number(batch.currentQty || 0) > 0 && isRawBatchQcUsable(batch))) {
+                  return false;
+                }
+                if (!formData.rebagProcessingLocationId) return true;
+                if (batch.physicalLocationId) {
+                  return batch.physicalLocationId === formData.rebagProcessingLocationId;
+                }
+                return getBatchPhysicalLocation(batch, systemConfig).toUpperCase() ===
+                  getLocationDisplayName(processingLocation).toUpperCase();
+              }),
               referenceDate
             );
             const usableCandidates = candidateBatches.filter(
@@ -3063,6 +3495,18 @@ Masukkan alasan override Super Admin:`
                 qty: totalMaterialQty,
                 unit: sourceSku?.unit || "",
                 sourceWarehouse: sourceBatch.sourceWarehouse || "",
+                administrativeWarehouse: getBatchAdministrativeWarehouse(
+                  sourceBatch,
+                  sourceSku,
+                  systemConfig
+                ),
+                physicalLocationId: sourceBatch.physicalLocationId || "",
+                physicalLocation: getBatchPhysicalLocation(sourceBatch, systemConfig),
+                materialClass: isPackagingMaterialSku(sourceSku)
+                  ? "SUPPORT"
+                  : isPrimaryAdministrativeRawSku(sourceSku)
+                  ? "PRIMARY_RAW"
+                  : "OTHER_RAW",
                 expiryDate: sourceBatch.expiryDate || "",
                 fefoOverride: fefoSkippedIds.includes(sourceBatch.batchId),
                 fefoOverrideReason: fefoSkippedIds.includes(sourceBatch.batchId)
@@ -3153,8 +3597,36 @@ Masukkan alasan override Super Admin:`
               qty,
               unit: sourceSku?.unit || "",
               sourceWarehouse: selectedBatch.sourceWarehouse || "",
+              administrativeWarehouse: getBatchAdministrativeWarehouse(
+                selectedBatch,
+                sourceSku,
+                systemConfig
+              ),
+              physicalLocationId: selectedBatch.physicalLocationId || "",
+              physicalLocation: getBatchPhysicalLocation(selectedBatch, systemConfig),
+              materialClass: isPackagingMaterialSku(sourceSku)
+                ? "SUPPORT"
+                : isPrimaryAdministrativeRawSku(sourceSku)
+                ? "PRIMARY_RAW"
+                : "OTHER_RAW",
+              isPrimaryMaterial: true,
             },
           ];
+        }
+
+        const processingLocationName = getLocationDisplayName(processingLocation);
+        const finishedLocationName = getLocationDisplayName(finishedLocation);
+        const locationMismatch = selectedMaterials.find((material) => {
+          if (material.physicalLocationId) {
+            return material.physicalLocationId !== processingLocation.id;
+          }
+          return String(material.physicalLocation || "").trim().toUpperCase() !==
+            processingLocationName.toUpperCase();
+        });
+        if (locationMismatch) {
+          return alert(
+            `Batch ${locationMismatch.batchId} secara fisik berada di ${locationMismatch.physicalLocation || "lokasi lain"}. Pindahkan dulu melalui Mutasi Internal ke ${processingLocationName}.`
+          );
         }
 
         let newBatchId = "";
@@ -3167,24 +3639,19 @@ Masukkan alasan override Super Admin:`
         const mainMoNumber = String(primaryMaterial?.moNumber || "").trim();
 
         if (!mainMoNumber) {
-          return alert("MO Utama/pengikat TM Hasil belum tersedia pada bahan utama.");
+          return alert("MO Utama belum tersedia pada bahan utama.");
         }
 
-        const priorTmRecords = [
-          ...transactions.filter((t) => t.type === "REBAGGING"),
-          ...inventoryBatches.filter((b) => b.resultTmNumber),
+        const primaryAdministrativeWarehouses = [
+          ...new Set(
+            selectedMaterials
+              .filter((material) => material.isPrimaryMaterial || material === primaryMaterial)
+              .map((material) => material.administrativeWarehouse || material.sourceWarehouse)
+              .filter(Boolean)
+          ),
         ];
-        const conflictingTmRecord = priorTmRecords.find(
-          (record) =>
-            String(record.resultTmNumber || "").trim().toUpperCase() === normalizedResultTm &&
-            getPrimaryMoNumber(record) &&
-            getPrimaryMoNumber(record).toUpperCase() !== mainMoNumber.toUpperCase()
-        );
-        if (conflictingTmRecord) {
-          return alert(
-            `TM Hasil ${resultTmNumber} sudah terikat ke MO Utama ${getPrimaryMoNumber(conflictingTmRecord)}. Gunakan TM Hasil yang sesuai dengan MO ${mainMoNumber}.`
-          );
-        }
+        const administrativeWarehouse = primaryAdministrativeWarehouses.join(", ");
+        const physicalLocation = finishedLocationName;
 
         const productionDateCode = getProductionDateCode(date);
         if (!productionDateCode) {
@@ -3203,25 +3670,38 @@ Masukkan alasan override Super Admin:`
           (material) => Number(material.damageQty || 0) > 0
         ).length;
 
-        const qualityStatus = formData.rebagQualityStatus || "MENUNGGU";
+        const processDeviationStatus =
+          formData.rebagQualityStatus === "ADA_PENYIMPANGAN"
+            ? "ADA_PENYIMPANGAN"
+            : "TIDAK_ADA_PENYIMPANGAN";
+        const hasProcessDeviation = processDeviationStatus === "ADA_PENYIMPANGAN";
         const deviation = String(formData.rebagDeviation || "").trim();
         const correctiveAction = String(formData.rebagCorrectiveAction || "").trim();
 
-        if (
-          qualityStatus === "TIDAK SESUAI" &&
-          (!deviation || !correctiveAction)
-        ) {
+        if (hasProcessDeviation && (!deviation || !correctiveAction)) {
           return alert(
-            "Jika status mutu TIDAK SESUAI, Penyimpangan dan Tindakan Koreksi wajib diisi."
+            "Jika ada penyimpangan proses, Kejadian/Penyimpangan dan Tindakan yang Dilakukan wajib diisi."
           );
         }
 
+        const processDeviationSnapshot = {
+          status: processDeviationStatus,
+          hasDeviation: hasProcessDeviation,
+          description: hasProcessDeviation ? deviation : "",
+          actionTaken: hasProcessDeviation ? correctiveAction : "",
+          recordedAt,
+          recordedBy: currentUser.username,
+        };
+
+        // Legacy qualityControl fields are retained so old PDFs/history stay readable.
+        // Final quality approval remains the responsibility of QC Produk Jadi.
         const qualityControlSnapshot = {
           coaNumber: String(formData.rebagCoaNumber || "").trim(),
-          qualityStatus,
-          deviation,
-          correctiveAction,
+          qualityStatus: "MENUNGGU_QC",
+          deviation: processDeviationSnapshot.description,
+          correctiveAction: processDeviationSnapshot.actionTaken,
           effectiveness: "",
+          processDeviation: processDeviationSnapshot,
         };
 
         const documentControlSnapshot = {
@@ -3239,15 +3719,7 @@ Masukkan alasan override Super Admin:`
         };
 
         await runTransaction(db, async (transaction) => {
-          const tmBindingRef = doc(
-            db,
-            "artifacts",
-            appId,
-            "public",
-            "data",
-            "tm_mo_bindings",
-            getStableDocId(resultTmNumber)
-          );
+          // TM Hasil belum dibuat pada tahap operator; binding dilakukan saat QC Produk Jadi.
           const batchSequenceRef = doc(
             db,
             "artifacts",
@@ -3261,21 +3733,10 @@ Masukkan alasan override Super Admin:`
             doc(db, "artifacts", appId, "public", "data", "batches", material.batchId)
           );
 
-          const [tmBindingSnap, batchSequenceSnap, ...materialSnaps] = await Promise.all([
-            transaction.get(tmBindingRef),
+          const [batchSequenceSnap, ...materialSnaps] = await Promise.all([
             transaction.get(batchSequenceRef),
             ...materialRefs.map((ref) => transaction.get(ref)),
           ]);
-
-          if (tmBindingSnap.exists()) {
-            const binding = tmBindingSnap.data();
-            const boundMo = String(binding.mainMoNumber || "").trim();
-            if (boundMo && boundMo.toUpperCase() !== mainMoNumber.toUpperCase()) {
-              throw new Error(
-                `TM Hasil ${resultTmNumber} sudah terikat ke MO Utama ${boundMo}, bukan ${mainMoNumber}.`
-              );
-            }
-          }
 
           const storedSequence = batchSequenceSnap.exists()
             ? Number(batchSequenceSnap.data()?.lastNumber || 0)
@@ -3330,6 +3791,16 @@ Masukkan alasan override Super Admin:`
             processKg,
             damageKg,
             sourceWarehouse: sourceWarehouses,
+            administrativeWarehouse,
+            administrativeWarehouses: primaryAdministrativeWarehouses,
+            administrativeAllocationStatus:
+              primaryAdministrativeWarehouses.length > 1 ? "MULTI_ADMIN_UNALLOCATED" : "SINGLE_ADMIN",
+            processingLocationId: processingLocation.id,
+            processingLocation: processingLocationName,
+            finishedLocationId: finishedLocation.id,
+            physicalLocationId: finishedLocation.id,
+            physicalLocation,
+            physicalLocationName: physicalLocation,
             targetStack: formData.rebagTargetStack,
             sourceBatchId: primaryMaterial?.batchId || "",
             sourceBatchIds: selectedMaterials.map((m) => m.batchId),
@@ -3348,11 +3819,13 @@ Masukkan alasan override Super Admin:`
               : null,
             documentControl: documentControlSnapshot,
             qualityControl: qualityControlSnapshot,
+            processDeviation: processDeviationSnapshot,
             moNumber: sourceMoNumbers.join(", "),
             sourceMoNumbers,
             sourceTmNumbers,
             mainMoNumber,
             resultTmNumber,
+            tmResultStatus: "PENDING_ADMIN",
             batchDateCode: productionDateCode,
             expiryDate: formData.rebagExpiryDate,
             qcStatus: "PENDING_QC",
@@ -3400,9 +3873,20 @@ Masukkan alasan override Super Admin:`
               sourceTmNumbers,
               mainMoNumber,
               resultTmNumber,
+              tmResultStatus: "PENDING_ADMIN",
               batchDateCode: productionDateCode,
               targetStack: formData.rebagTargetStack,
               sourceWarehouse: sourceWarehouses,
+              administrativeWarehouse,
+              administrativeWarehouses: primaryAdministrativeWarehouses,
+              administrativeAllocationStatus:
+                primaryAdministrativeWarehouses.length > 1 ? "MULTI_ADMIN_UNALLOCATED" : "SINGLE_ADMIN",
+              processingLocationId: processingLocation.id,
+              processingLocation: processingLocationName,
+              finishedLocationId: finishedLocation.id,
+              physicalLocationId: finishedLocation.id,
+              physicalLocation,
+              physicalLocationName: physicalLocation,
               sourceBatchId: primaryMaterial?.batchId || "",
               sourceBatchIds: selectedMaterials.map((m) => m.batchId),
               sourceSkuId: primaryMaterial?.skuId || "",
@@ -3439,23 +3923,10 @@ Masukkan alasan override Super Admin:`
                 : null,
               documentControl: documentControlSnapshot,
               qualityControl: qualityControlSnapshot,
+              processDeviation: processDeviationSnapshot,
               ...auditMeta,
             }
           );
-
-          const existingBinding = tmBindingSnap.exists() ? tmBindingSnap.data() : {};
-          transaction.set(tmBindingRef, {
-            resultTmNumber,
-            mainMoNumber,
-            firstProductionAt: existingBinding.firstProductionAt || date,
-            firstTransactionId: existingBinding.firstTransactionId || txId,
-            firstBatchId: existingBinding.firstBatchId || newBatchId,
-            lastProductionAt: date,
-            lastTransactionId: txId,
-            lastBatchId: newBatchId,
-            productionCount: Number(existingBinding.productionCount || 0) + 1,
-            updatedBy: currentUser.username,
-          });
 
           transaction.set(batchSequenceRef, {
             skuId: targetSku.id,
@@ -3485,9 +3956,12 @@ Masukkan alasan override Super Admin:`
                 unit: material.unit,
                 moNumber: material.moNumber,
                 tmNumber: material.tmNumber,
-                resultTmNumber,
+                resultTmNumber: "",
+                tmResultStatus: "PENDING_ADMIN",
                 mainMoNumber,
                 sourceWarehouse: material.sourceWarehouse,
+                administrativeWarehouse: material.administrativeWarehouse || "",
+                physicalLocation: material.physicalLocation || physicalLocation,
                 cause: "Kerusakan saat proses Rebagging",
                 operator: currentUser.username,
                 stockAlreadyApplied: true,
@@ -3495,6 +3969,179 @@ Masukkan alasan override Super Admin:`
               }
             );
           });
+        });
+      } else if (activeOpTab === "internal_move") {
+        const sourceBatch = inventoryBatches.find(
+          (batch) => batch.batchId === internalMoveForm.batchId
+        );
+        const moveQty = Number(internalMoveForm.qty || 0);
+        const destination = locations.find(
+          (location) =>
+            location.id === internalMoveForm.destinationLocationId &&
+            location.active !== false &&
+            locationSupportsStorage(location)
+        );
+        const reason = String(internalMoveForm.reason || "").trim();
+
+        if (!sourceBatch) return alert("Pilih batch sumber mutasi internal.");
+        if (!destination) return alert("Pilih lokasi tujuan dari Master Lokasi.");
+        if (!Number.isFinite(moveQty) || moveQty <= 0) return alert("Qty mutasi harus lebih dari 0.");
+        if (moveQty > Number(sourceBatch.currentQty || 0)) {
+          return alert(`Qty mutasi melebihi stok aktif batch (${sourceBatch.currentQty || 0}).`);
+        }
+        if (reason.length < 3) return alert("Alasan mutasi wajib diisi minimal 3 karakter.");
+
+        const sourceLocationName = getBatchPhysicalLocation(sourceBatch, systemConfig);
+        const destinationName = getLocationDisplayName(destination);
+        if (
+          sourceBatch.physicalLocationId === destination.id ||
+          (!sourceBatch.physicalLocationId && sourceLocationName.toUpperCase() === destinationName.toUpperCase())
+        ) {
+          return alert("Lokasi tujuan sama dengan lokasi fisik saat ini.");
+        }
+
+        const sourceSku = skus.find((sku) => sku.id === sourceBatch.skuId);
+        const sourceRef = doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "batches",
+          sourceBatch.batchId
+        );
+        const moveTxId = `TRX-MOVE-${timestamp}`;
+
+        await runTransaction(db, async (transaction) => {
+          const sourceSnap = await transaction.get(sourceRef);
+          if (!sourceSnap.exists()) throw new Error("Batch sumber sudah tidak ditemukan.");
+          const liveBatch = sourceSnap.data();
+          const liveQty = Number(liveBatch.currentQty || 0);
+          if (moveQty > liveQty) {
+            throw new Error(`Qty mutasi melebihi stok terbaru (${liveQty}).`);
+          }
+
+          const hasOtherQualityQty =
+            Number(liveBatch.processQty || 0) > 0 || Number(liveBatch.damageQty || 0) > 0;
+          const isFullActiveMove = Math.abs(moveQty - liveQty) <= 0.0001 && !hasOtherQualityQty;
+          let destinationBatchId = liveBatch.batchId;
+
+          const supportMaterialMove = isPackagingMaterialSku(sourceSku);
+          const sourceAdministrativeWarehouse =
+            liveBatch.administrativeWarehouse ||
+            (Array.isArray(liveBatch.administrativeWarehouses)
+              ? liveBatch.administrativeWarehouses.join(", ")
+              : liveBatch.sourceWarehouse || "");
+          const destinationAdministrativeWarehouse = supportMaterialMove
+            ? destinationName
+            : sourceAdministrativeWarehouse;
+
+          if (isFullActiveMove) {
+            transaction.update(sourceRef, {
+              ...(supportMaterialMove ? { administrativeWarehouse: destinationAdministrativeWarehouse } : {}),
+              physicalLocationId: destination.id,
+              physicalLocation: destinationName,
+              physicalLocationName: destinationName,
+              lastInternalMoveAt: date,
+              lastInternalMoveBy: currentUser.username,
+            });
+          } else {
+            destinationBatchId = `${liveBatch.batchId}-MV-${String(timestamp).slice(-6)}`;
+            const destinationRef = doc(
+              db,
+              "artifacts",
+              appId,
+              "public",
+              "data",
+              "batches",
+              destinationBatchId
+            );
+
+            transaction.update(sourceRef, {
+              currentQty: liveQty - moveQty,
+              ...(sourceSku?.type === "rebagged"
+                ? {
+                    goodQty: Math.max(0, Number(liveBatch.goodQty ?? liveQty) - moveQty),
+                    goodKg: Math.max(
+                      0,
+                      Number(liveBatch.goodKg || 0) -
+                        moveQty * (Number(liveBatch.weightPerPackKg) || inferWeightPerPackKg(sourceSku) || 0)
+                    ),
+                  }
+                : {}),
+            });
+
+            const movedWeight =
+              sourceSku?.type === "rebagged"
+                ? moveQty * (Number(liveBatch.weightPerPackKg) || inferWeightPerPackKg(sourceSku) || 0)
+                : 0;
+
+            transaction.set(destinationRef, {
+              ...liveBatch,
+              batchId: destinationBatchId,
+              parentBatchId: liveBatch.parentBatchId || liveBatch.batchId,
+              productionBatchId: liveBatch.productionBatchId || liveBatch.batchId,
+              splitFromBatchId: liveBatch.batchId,
+              initialQty: moveQty,
+              currentQty: moveQty,
+              ...(sourceSku?.type === "rebagged"
+                ? {
+                    goodQty: moveQty,
+                    goodKg: movedWeight,
+                    processQty: 0,
+                    processKg: 0,
+                    damageQty: 0,
+                    damageKg: 0,
+                  }
+                : {}),
+              administrativeWarehouse: destinationAdministrativeWarehouse,
+              physicalLocationId: destination.id,
+              physicalLocation: destinationName,
+              physicalLocationName: destinationName,
+              locationMoveSplit: true,
+              movedAt: date,
+              movedBy: currentUser.username,
+            });
+          }
+
+          transaction.set(
+            doc(db, "artifacts", appId, "public", "data", "transactions", moveTxId),
+            {
+              id: moveTxId,
+              date,
+              type: "INTERNAL_MOVE",
+              skuId: liveBatch.skuId,
+              skuName: sourceSku?.name || liveBatch.skuId,
+              qtyChange: moveQty,
+              unit: sourceSku?.unit || "",
+              sourceBatchId: liveBatch.batchId,
+              destinationBatchId,
+              batchId: destinationBatchId,
+              moNumber: liveBatch.moNumber || "",
+              mainMoNumber: liveBatch.mainMoNumber || getPrimaryMoNumber(liveBatch) || "",
+              tmNumber: liveBatch.tmNumber || "",
+              resultTmNumber: liveBatch.resultTmNumber || "",
+              administrativeWarehouse: destinationAdministrativeWarehouse,
+              administrativeWarehouseBefore: sourceAdministrativeWarehouse,
+              administrativeWarehouseAfter: destinationAdministrativeWarehouse,
+              administrativeWarehouses: liveBatch.administrativeWarehouses || [],
+              supportMaterialMove,
+              fromPhysicalLocationId: liveBatch.physicalLocationId || "",
+              fromPhysicalLocation: sourceLocationName,
+              toPhysicalLocationId: destination.id,
+              toPhysicalLocation: destinationName,
+              reason,
+              operator: currentUser.username,
+              ...auditMeta,
+            }
+          );
+        });
+
+        setInternalMoveForm({
+          batchId: "",
+          qty: "",
+          destinationLocationId: "",
+          reason: "",
         });
       } else if (activeOpTab === "outbound") {
         const sku = skus.find((s) => s.id === formData.outSkuId);
@@ -3670,6 +4317,14 @@ Masukkan alasan override Super Admin:`
                 operator: currentUser.username,
                 batchId: item.batchId,
                 sourceWarehouse: liveBatch.sourceWarehouse || "",
+                administrativeWarehouse:
+                  liveBatch.administrativeWarehouse ||
+                  (Array.isArray(liveBatch.administrativeWarehouses)
+                    ? liveBatch.administrativeWarehouses.join(", ")
+                    : ""),
+                administrativeWarehouses: liveBatch.administrativeWarehouses || [],
+                physicalLocation: getBatchPhysicalLocation(liveBatch, systemConfig),
+                targetStack: liveBatch.targetStack || "",
                 moNumber: liveBatch.moNumber || "",
                 sourceMoNumbers: liveBatch.sourceMoNumbers || [],
                 sourceTmNumbers: liveBatch.sourceTmNumbers || [],
@@ -3702,7 +4357,7 @@ Masukkan alasan override Super Admin:`
       showNotif("Transaksi Berhasil Disimpan");
       setFormData(initialFormData);
       setInboundLines([
-        { rowId: `IN-${Date.now()}`, skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }
+        { rowId: `IN-${Date.now()}`, skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "", physicalLocationId: "" }
       ]);
       setOutboundSelections({});
       setRebagMaterialSelections({});
@@ -3715,8 +4370,8 @@ Masukkan alasan override Super Admin:`
   const handleProcessResolutionSubmit = async (e) => {
     e.preventDefault();
 
-    if (!hasAccess(["Super Admin", "Admin", "Operator"])) {
-      return alert("Anda tidak memiliki akses untuk menindaklanjuti barang PROCESS.");
+    if (!canPerform("rebagging")) {
+      return alert("Tindak lanjut barang PROCESS hanya tersedia untuk pengguna dengan akses Rebagging.");
     }
     if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
 
@@ -4273,6 +4928,402 @@ Masukkan alasan override Super Admin:`
     effectiveQcHistoryPage * HISTORY_PAGE_SIZE
   );
 
+  const moDashboardData = useMemo(() => {
+    const packagingWords = [
+      "KEMASAN",
+      "KARDUS",
+      "KARTON",
+      "PLASTIK",
+      "PACKAGING",
+      "LABEL",
+      "BENANG",
+      "ROLL",
+      "SHEET",
+    ];
+
+    const isPrimaryRawSku = (sku) => {
+      if (!sku || sku.type !== "bulk") return false;
+      const name = String(sku.name || "").toUpperCase();
+      const isRiceOrSugar = name.includes("BERAS") || name.includes("GULA");
+      const isPackaging = packagingWords.some((word) => name.includes(word));
+      return isRiceOrSugar && !isPackaging;
+    };
+
+    const groups = {};
+    const ensureMo = (moNumber) => {
+      const mo = String(moNumber || "-").trim() || "-";
+      if (!groups[mo]) {
+        groups[mo] = {
+          mo,
+          warehouses: {},
+          productRows: [],
+          rawInitialKg: 0,
+          rawCurrentKg: 0,
+          rawUsedKg: 0,
+          rawDamageKg: 0,
+          producedPack: 0,
+          currentGoodPack: 0,
+          processPack: 0,
+          damagePack: 0,
+          pendingQc: 0,
+          holdQc: 0,
+          rejectedQc: 0,
+        };
+      }
+      return groups[mo];
+    };
+
+    const ensureWarehouse = (moGroup, warehouse, sku) => {
+      const warehouseName = String(warehouse || "-").trim() || "-";
+      const key = `${warehouseName}|${sku.id}`;
+      if (!moGroup.warehouses[key]) {
+        moGroup.warehouses[key] = {
+          key,
+          warehouse: warehouseName,
+          skuId: sku.id,
+          name: sku.name,
+          unit: sku.unit || "KG",
+          initialQty: 0,
+          currentQty: 0,
+          usedQty: 0,
+          damageQty: 0,
+          inboundBatches: [],
+          sourceTms: new Set(),
+          qcStatuses: new Set(),
+          physicalLocations: new Set(),
+        };
+      }
+      return moGroup.warehouses[key];
+    };
+
+    // Stok awal berdasarkan transaksi INBOUND.
+    transactions
+      .filter((tx) => tx.type === "INBOUND")
+      .forEach((tx) => {
+        const sku = skus.find((item) => item.id === tx.skuId);
+        if (!isPrimaryRawSku(sku)) return;
+
+        const group = ensureMo(tx.moNumber);
+        const row = ensureWarehouse(
+          group,
+          tx.administrativeWarehouse || tx.sourceWarehouse,
+          sku
+        );
+        row.physicalLocations.add(tx.physicalLocation || getProcessingLocation(systemConfig));
+        const qty = Number(tx.qtyChange || 0);
+
+        row.initialQty += qty;
+        if (tx.tmNumber) row.sourceTms.add(tx.tmNumber);
+        if (tx.batchId) {
+          row.inboundBatches.push({
+            batchId: tx.batchId,
+            tmNumber: tx.tmNumber || "",
+            date: tx.date || "",
+            initialQty: qty,
+          });
+        }
+
+        if (String(sku.unit || "").toUpperCase() === "KG") {
+          group.rawInitialKg += qty;
+        }
+      });
+
+    // Pemakaian bahan utama berdasarkan transaksi REBAGGING.
+    transactions
+      .filter((tx) => tx.type === "REBAGGING")
+      .forEach((tx) => {
+        const materials = Array.isArray(tx.materials) ? tx.materials : [];
+
+        materials.forEach((material) => {
+          const sku = skus.find((item) => item.id === material.skuId);
+          if (!isPrimaryRawSku(sku)) return;
+
+          const group = ensureMo(material.moNumber || tx.mainMoNumber);
+          const row = ensureWarehouse(
+            group,
+            material.administrativeWarehouse || material.sourceWarehouse,
+            sku
+          );
+          row.physicalLocations.add(material.physicalLocation || getProcessingLocation(systemConfig));
+          const damageQty = Number(material.damageQty || 0);
+          const totalQty = Number(material.totalQty ?? material.qty ?? 0);
+          const usedQty = Number(
+            material.usedQty ?? Math.max(0, totalQty - damageQty)
+          );
+
+          row.usedQty += usedQty;
+          row.damageQty += damageQty;
+
+          if (String(sku.unit || "").toUpperCase() === "KG") {
+            group.rawUsedKg += usedQty;
+            group.rawDamageKg += damageQty;
+          }
+        });
+
+        const mainMo = String(tx.mainMoNumber || getPrimaryMoNumber(tx) || "-");
+        const group = ensureMo(mainMo);
+        group.producedPack += Number(tx.outputQty ?? tx.processedQty ?? 0);
+      });
+
+    // Saldo bahan aktif per MO + gudang.
+    inventoryBatches.forEach((batch) => {
+      const sku = skus.find((item) => item.id === batch.skuId);
+      if (!isPrimaryRawSku(sku)) return;
+
+      const group = ensureMo(batch.moNumber);
+      const row = ensureWarehouse(
+        group,
+        getBatchAdministrativeWarehouse(batch, sku, systemConfig),
+        sku
+      );
+      row.physicalLocations.add(getBatchPhysicalLocation(batch, systemConfig));
+      const qty = Number(batch.currentQty || 0);
+
+      row.currentQty += qty;
+      row.qcStatuses.add(getQcStatusLabel(batch));
+      if (batch.tmNumber) row.sourceTms.add(batch.tmNumber);
+
+      if (String(sku.unit || "").toUpperCase() === "KG") {
+        group.rawCurrentKg += qty;
+      }
+    });
+
+    // Saldo produk jadi aktif per MO.
+    inventoryBatches.forEach((batch) => {
+      const sku = skus.find((item) => item.id === batch.skuId);
+      if (!sku || sku.type !== "rebagged") return;
+
+      const good = Number(batch.currentQty || 0);
+      const process = Number(batch.processQty || 0);
+      const damage = Number(batch.damageQty || 0);
+      if (good <= 0 && process <= 0 && damage <= 0) return;
+
+      const mo = String(
+        batch.mainMoNumber || getPrimaryMoNumber(batch) || batch.moNumber || "-"
+      );
+      const group = ensureMo(mo);
+
+      const sourceWarehouses = [
+        ...new Set(
+          (Array.isArray(batch.materials) ? batch.materials : [])
+            .map((material) => material.sourceWarehouse)
+            .filter(Boolean)
+        ),
+      ].sort((a, b) =>
+        String(a).localeCompare(String(b), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      );
+
+      const primaryAdministrativeWarehouses = [
+        ...new Set(
+          (Array.isArray(batch.administrativeWarehouses) && batch.administrativeWarehouses.length > 0
+            ? batch.administrativeWarehouses
+            : (Array.isArray(batch.materials) ? batch.materials : [])
+                .filter((material) => material.isPrimaryMaterial)
+                .map((material) => material.administrativeWarehouse || material.sourceWarehouse)
+          ).filter(Boolean)
+        ),
+      ];
+      const finishedAdministrativeWarehouse =
+        batch.administrativeWarehouse ||
+        primaryAdministrativeWarehouses.join(", ") ||
+        (sourceWarehouses.length > 0 ? sourceWarehouses.join(", ") : batch.sourceWarehouse || "-");
+
+      group.productRows.push({
+        batchId: batch.batchId || "",
+        skuId: sku.id,
+        name: sku.name,
+        tmResult: batch.resultTmNumber || "",
+        sourceWarehouses:
+          sourceWarehouses.length > 0
+            ? sourceWarehouses.join(", ")
+            : batch.sourceWarehouse || "-",
+        administrativeWarehouse: finishedAdministrativeWarehouse,
+        administrativeWarehouses:
+          batch.administrativeWarehouses || primaryAdministrativeWarehouses,
+        physicalLocation: getBatchPhysicalLocation(batch, systemConfig),
+        targetStack: batch.targetStack || "-",
+        productionDate: batch.productionDate || batch.date || "",
+        good,
+        process,
+        damage,
+        qcStatus: getQcStatusLabel(batch),
+      });
+
+      group.currentGoodPack += good;
+      group.processPack += process;
+      group.damagePack += damage;
+
+      if (batch.qcStatus === "PENDING_QC") group.pendingQc += 1;
+      if (batch.qcStatus === "HOLD") group.holdQc += 1;
+      if (batch.qcStatus === "REJECTED") group.rejectedQc += 1;
+    });
+
+    const moRows = Object.values(groups)
+      .map((group) => {
+        const warehouses = Object.values(group.warehouses)
+          .map((row) => ({
+            ...row,
+            sourceTm: [...row.sourceTms].sort().join(", "),
+            qcStatus:
+              [...row.qcStatuses].sort().join(", ") ||
+              (row.currentQty > 0 ? "LEGACY" : "-"),
+            physicalLocation:
+              [...row.physicalLocations].sort().join(", ") ||
+              getProcessingLocation(systemConfig),
+          }))
+          .filter(
+            (row) =>
+              row.initialQty > 0 ||
+              row.currentQty > 0 ||
+              row.usedQty > 0 ||
+              row.damageQty > 0
+          )
+          .sort((a, b) => {
+            const adminCompare = a.administrativeWarehouse.localeCompare(
+              b.administrativeWarehouse,
+              undefined,
+              { numeric: true, sensitivity: "base" }
+            );
+            if (adminCompare !== 0) return adminCompare;
+            const physicalCompare = a.physicalLocation.localeCompare(
+              b.physicalLocation,
+              undefined,
+              { numeric: true, sensitivity: "base" }
+            );
+            if (physicalCompare !== 0) return physicalCompare;
+            const stackCompare = a.targetStack.localeCompare(
+              b.targetStack,
+              undefined,
+              { numeric: true, sensitivity: "base" }
+            );
+            if (stackCompare !== 0) return stackCompare;
+            return a.name.localeCompare(b.name, undefined, {
+              numeric: true,
+              sensitivity: "base",
+            });
+          });
+
+        const productRows = group.productRows.sort((a, b) => {
+          const warehouseCompare = a.sourceWarehouses.localeCompare(
+            b.sourceWarehouses,
+            undefined,
+            { numeric: true, sensitivity: "base" }
+          );
+          if (warehouseCompare !== 0) return warehouseCompare;
+          return String(a.batchId).localeCompare(String(b.batchId), undefined, {
+            numeric: true,
+            sensitivity: "base",
+          });
+        });
+
+        const finishedWarehouseMap = {};
+        productRows.forEach((row) => {
+          const administrativeWarehouse = String(row.administrativeWarehouse || "-");
+          const physicalLocation = String(row.physicalLocation || getProcessingLocation(systemConfig));
+          const targetStack = String(row.targetStack || "-");
+          const key = `${row.skuId}|${administrativeWarehouse}|${physicalLocation}|${targetStack}`;
+          if (!finishedWarehouseMap[key]) {
+            finishedWarehouseMap[key] = {
+              key,
+              skuId: row.skuId,
+              name: row.name,
+              administrativeWarehouse,
+              physicalLocation,
+              targetStack,
+              good: 0,
+              process: 0,
+              damage: 0,
+              batchCount: 0,
+              tmResults: new Set(),
+              qcStatuses: new Set(),
+            };
+          }
+
+          finishedWarehouseMap[key].good += Number(row.good || 0);
+          finishedWarehouseMap[key].process += Number(row.process || 0);
+          finishedWarehouseMap[key].damage += Number(row.damage || 0);
+          finishedWarehouseMap[key].batchCount += 1;
+          if (row.tmResult) finishedWarehouseMap[key].tmResults.add(row.tmResult);
+          if (row.qcStatus) finishedWarehouseMap[key].qcStatuses.add(row.qcStatus);
+        });
+
+        const finishedWarehouseRows = Object.values(finishedWarehouseMap)
+          .map((row) => ({
+            ...row,
+            tmResult: [...row.tmResults].sort().join(", "),
+            qcStatus: [...row.qcStatuses].sort().join(", ") || "-",
+            total: row.good + row.process + row.damage,
+          }))
+          .sort((a, b) => {
+            const warehouseCompare = a.warehouse.localeCompare(
+              b.warehouse,
+              undefined,
+              { numeric: true, sensitivity: "base" }
+            );
+            if (warehouseCompare !== 0) return warehouseCompare;
+            return a.name.localeCompare(b.name, undefined, {
+              numeric: true,
+              sensitivity: "base",
+            });
+          });
+
+        const consumedKg = group.rawUsedKg + group.rawDamageKg;
+        const progress =
+          group.rawInitialKg > 0
+            ? Math.min(100, Math.max(0, (consumedKg / group.rawInitialKg) * 100))
+            : 0;
+
+        return {
+          ...group,
+          warehouses,
+          productRows,
+          finishedWarehouseRows,
+          consumedKg,
+          progress,
+        };
+      })
+      .filter(
+        (group) =>
+          group.warehouses.length > 0 ||
+          group.productRows.length > 0 ||
+          group.producedPack > 0
+      )
+      .sort((a, b) =>
+        a.mo.localeCompare(b.mo, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      );
+
+    return {
+      moRows,
+      totalRawCurrentKg: moRows.reduce(
+        (sum, group) => sum + group.rawCurrentKg,
+        0
+      ),
+      totalGoodPack: moRows.reduce(
+        (sum, group) => sum + group.currentGoodPack,
+        0
+      ),
+      totalProcessPack: moRows.reduce(
+        (sum, group) => sum + group.processPack,
+        0
+      ),
+      attentionCount: moRows.reduce(
+        (sum, group) =>
+          sum +
+          group.pendingQc +
+          group.holdQc +
+          group.rejectedQc +
+          (group.damagePack > 0 ? 1 : 0),
+        0
+      ),
+    };
+  }, [inventoryBatches, skus, transactions, systemConfig.processingLocation]);
+
   const reportTransactions = useMemo(() => {
     return transactions.filter((t) => {
       const txDate = new Date(t.date);
@@ -4607,15 +5658,159 @@ Masukkan alasan override Super Admin:`
 
   const handleQcSubmit = async (e) => {
     e.preventDefault();
-    if (!hasAccess(["Super Admin", "Admin", "QC"])) return alert("Akses keputusan QC hanya tersedia untuk QC/Admin/Super Admin.");
+    if (!canPerform("qc")) return alert("Akses keputusan QC hanya tersedia untuk QC dan Super Admin.");
     if (!db) return alert("Database belum siap.");
+    const isIncoming = activeQcTab === "incoming";
+
+    if (isIncoming) {
+      if (!qcForm.moNumber) return alert("Pilih MO bahan yang akan diperiksa.");
+      const group = incomingQcMoGroups.find(
+        (item) => String(item.moNumber).toUpperCase() === String(qcForm.moNumber).toUpperCase()
+      );
+      if (!group || group.items.length === 0) {
+        return alert("Tidak ada batch bahan unresolved pada MO tersebut.");
+      }
+
+      const failedChecks = Object.entries(qcForm.checks)
+        .filter(([, value]) => !value)
+        .map(([key]) => key);
+      if (qcForm.decision === "ACCEPT" && failedChecks.length > 0) {
+        return alert(`Tidak dapat ACCEPT. Masih ada ${failedChecks.length} parameter QC yang Tidak Sesuai.`);
+      }
+      if (["HOLD", "REJECT"].includes(qcForm.decision) && !String(qcForm.nonconformity || "").trim()) {
+        return alert("Penyimpangan/Ketidaksesuaian wajib diisi untuk HOLD atau REJECT.");
+      }
+      if (qcForm.decision === "REJECT" && !String(qcForm.correctiveAction || "").trim()) {
+        return alert("Tindakan koreksi/disposisi wajib diisi untuk REJECT.");
+      }
+
+      const inspectedAt = new Date().toISOString();
+      const recordId = `QC-IN-MO-${Date.now()}`;
+      const batchStatus = qcForm.decision === "ACCEPT"
+        ? "ACCEPTED"
+        : qcForm.decision === "HOLD"
+        ? "HOLD"
+        : "REJECTED";
+      const batchIds = group.items.map((item) => item.batchId);
+      const tmNumbers = [...group.tmNumbers];
+      const administrativeWarehouses = [
+        ...new Set(group.items.map((item) => item.administrativeWarehouse).filter(Boolean)),
+      ];
+      const physicalLocations = [
+        ...new Set(group.items.map((item) => item.physicalLocation).filter(Boolean)),
+      ];
+      const record = {
+        id: recordId,
+        qcType: "INCOMING",
+        scope: "MO",
+        moNumber: group.moNumber,
+        mainMoNumber: group.moNumber,
+        batchId: "",
+        batchIds,
+        tmNumber: tmNumbers.join(", "),
+        tmNumbers,
+        itemCount: group.items.length,
+        skuCount: new Set(group.items.map((item) => item.skuId)).size,
+        skuId: "",
+        skuName: `${group.items.length} item bahan / ${tmNumbers.length} TM`,
+        unit: "",
+        administrativeWarehouse: administrativeWarehouses.join(", "),
+        administrativeWarehouses,
+        physicalLocation: physicalLocations.join(", "),
+        physicalLocations,
+        qtySnapshot: null,
+        items: group.items,
+        coaNumber: String(qcForm.coaNumber || "").trim(),
+        checks: qcForm.checks,
+        decision: qcForm.decision,
+        batchStatus,
+        inspectionNote: String(qcForm.inspectionNote || "").trim(),
+        nonconformity: String(qcForm.nonconformity || "").trim(),
+        correctiveAction: String(qcForm.correctiveAction || "").trim(),
+        inspectedAt,
+        inspectedBy: currentUser.username,
+        inspectedRole: currentUser.role,
+      };
+
+      try {
+        setQcSaving(true);
+        const batchRefs = batchIds.map((batchId) =>
+          doc(db, "artifacts", appId, "public", "data", "batches", batchId)
+        );
+        const relatedInboundTxs = batchIds
+          .map((batchId) => transactions.find((item) => item.type === "INBOUND" && item.batchId === batchId))
+          .filter(Boolean);
+        const txRefs = relatedInboundTxs.map((item) =>
+          doc(db, "artifacts", appId, "public", "data", "transactions", item.id)
+        );
+
+        await runTransaction(db, async (transaction) => {
+          const allSnaps = await Promise.all(
+            [...batchRefs, ...txRefs].map((ref) => transaction.get(ref))
+          );
+          const batchSnaps = allSnaps.slice(0, batchRefs.length);
+          const txSnaps = allSnaps.slice(batchRefs.length);
+          const unresolvedStatuses = new Set(["PENDING_QC", "HOLD", "REJECTED"]);
+
+          batchSnaps.forEach((snap, index) => {
+            if (!snap.exists()) throw new Error(`Batch ${batchIds[index]} sudah tidak ditemukan.`);
+            const liveBatch = snap.data();
+            if (String(liveBatch.moNumber || "").trim().toUpperCase() !== String(group.moNumber).toUpperCase()) {
+              throw new Error(`Batch ${batchIds[index]} tidak lagi berada pada MO ${group.moNumber}.`);
+            }
+            if (!unresolvedStatuses.has(liveBatch.qcStatus)) {
+              throw new Error(`Status QC batch ${batchIds[index]} sudah berubah. Muat ulang halaman QC.`);
+            }
+          });
+
+          batchRefs.forEach((ref) => {
+            transaction.update(ref, {
+              qcStatus: batchStatus,
+              qcType: "INCOMING",
+              qcScope: "MO",
+              qcMoNumber: group.moNumber,
+              qcLastRecordId: recordId,
+              qcUpdatedAt: inspectedAt,
+              qcUpdatedBy: currentUser.username,
+              qcDecision: qcForm.decision,
+            });
+          });
+
+          txRefs.forEach((ref, index) => {
+            if (!txSnaps[index]?.exists()) return;
+            transaction.update(ref, {
+              qcStatus: batchStatus,
+              qcScope: "MO",
+              qcMoNumber: group.moNumber,
+              qcLastRecordId: recordId,
+              qcUpdatedAt: inspectedAt,
+              qcUpdatedBy: currentUser.username,
+              qcDecision: qcForm.decision,
+            });
+          });
+
+          transaction.set(
+            doc(db, "artifacts", appId, "public", "data", "qc_records", recordId),
+            record
+          );
+        });
+
+        showNotif(`QC MO ${group.moNumber}: ${qcForm.decision} · ${group.items.length} item / ${tmNumbers.length} TM`);
+        resetQcForm(activeQcTab);
+      } catch (error) {
+        console.error("QC MO Save Error:", error);
+        alert(`Gagal menyimpan QC MO: ${error.message || "Terjadi kesalahan."}`);
+      } finally {
+        setQcSaving(false);
+      }
+      return;
+    }
+
     if (!qcForm.batchId) return alert("Pilih batch yang akan diperiksa.");
     const batch = inventoryBatches.find((item) => item.batchId === qcForm.batchId);
     if (!batch) return alert("Batch tidak ditemukan.");
     const sku = skus.find((item) => item.id === batch.skuId);
-    const isIncoming = activeQcTab === "incoming";
-    if (isIncoming && sku?.type !== "bulk") return alert("QC Bahan Masuk hanya untuk SKU bahan baku/kemasan.");
-    if (!isIncoming && sku?.type !== "rebagged") return alert("QC Produk Jadi hanya untuk SKU hasil Rebagging.");
+    if (sku?.type !== "rebagged") return alert("QC Produk Jadi hanya untuk SKU hasil Rebagging.");
 
     const failedChecks = Object.entries(qcForm.checks).filter(([, value]) => !value).map(([key]) => key);
     const positiveDecision = isIncoming ? "ACCEPT" : "RELEASE";
@@ -4634,6 +5829,18 @@ Masukkan alasan override Super Admin:`
     const batchStatus = isIncoming
       ? qcForm.decision === "ACCEPT" ? "ACCEPTED" : qcForm.decision === "HOLD" ? "HOLD" : "REJECTED"
       : qcForm.decision === "RELEASE" ? "RELEASED" : qcForm.decision === "HOLD" ? "HOLD" : "REJECTED";
+    const resultTmNumber = !isIncoming
+      ? String(qcForm.resultTmNumber || batch.resultTmNumber || "").trim()
+      : String(batch.resultTmNumber || "").trim();
+    const mainMoNumber = batch.mainMoNumber || getPrimaryMoNumber(batch) || "";
+
+    if (!isIncoming && qcForm.decision === "RELEASE" && !resultTmNumber) {
+      return alert("TM Hasil wajib diisi oleh QC/Admin sebelum produk jadi di-RELEASE.");
+    }
+    if (!isIncoming && resultTmNumber && !mainMoNumber) {
+      return alert("MO Utama batch produk jadi belum tersedia untuk pengikatan TM Hasil.");
+    }
+
     const record = {
       id: recordId,
       qcType: isIncoming ? "INCOMING" : "FINISHED",
@@ -4642,10 +5849,17 @@ Masukkan alasan override Super Admin:`
       skuName: sku?.name || batch.skuId || "",
       unit: sku?.unit || "",
       moNumber: batch.moNumber || "",
-      mainMoNumber: batch.mainMoNumber || getPrimaryMoNumber(batch) || "",
+      mainMoNumber,
       tmNumber: batch.tmNumber || "",
-      resultTmNumber: batch.resultTmNumber || "",
+      resultTmNumber,
       sourceWarehouse: batch.sourceWarehouse || "",
+      administrativeWarehouse:
+        batch.administrativeWarehouse ||
+        (Array.isArray(batch.administrativeWarehouses)
+          ? batch.administrativeWarehouses.join(", ")
+          : ""),
+      administrativeWarehouses: batch.administrativeWarehouses || [],
+      physicalLocation: getBatchPhysicalLocation(batch, systemConfig),
       targetStack: batch.targetStack || "",
       productionDate: batch.productionDate || "",
       expiryDate: batch.expiryDate || "",
@@ -4669,16 +5883,51 @@ Masukkan alasan override Super Admin:`
           ? item.type === "INBOUND" && item.batchId === batch.batchId
           : item.type === "REBAGGING" && item.batchId === batch.batchId
       );
+      const relatedDamageTxs = !isIncoming && relatedOperationalTx?.id
+        ? transactions.filter(
+            (item) =>
+              item.type === "MATERIAL_DAMAGE" &&
+              item.parentTransactionId === relatedOperationalTx.id
+          )
+        : [];
 
       await runTransaction(db, async (transaction) => {
         const batchRef = doc(db, "artifacts", appId, "public", "data", "batches", batch.batchId);
         const relatedTxRef = relatedOperationalTx?.id
           ? doc(db, "artifacts", appId, "public", "data", "transactions", relatedOperationalTx.id)
           : null;
+        const damageTxRefs = relatedDamageTxs.map((item) =>
+          doc(db, "artifacts", appId, "public", "data", "transactions", item.id)
+        );
+        const tmBindingRef = !isIncoming && resultTmNumber
+          ? doc(
+              db,
+              "artifacts",
+              appId,
+              "public",
+              "data",
+              "tm_mo_bindings",
+              getStableDocId(resultTmNumber)
+            )
+          : null;
 
-        const batchSnap = await transaction.get(batchRef);
-        const relatedTxSnap = relatedTxRef ? await transaction.get(relatedTxRef) : null;
+        const [batchSnap, relatedTxSnap, tmBindingSnap, ...damageTxSnaps] = await Promise.all([
+          transaction.get(batchRef),
+          relatedTxRef ? transaction.get(relatedTxRef) : Promise.resolve(null),
+          tmBindingRef ? transaction.get(tmBindingRef) : Promise.resolve(null),
+          ...damageTxRefs.map((ref) => transaction.get(ref)),
+        ]);
         if (!batchSnap.exists()) throw new Error("Batch sudah tidak ditemukan.");
+
+        if (tmBindingSnap?.exists()) {
+          const binding = tmBindingSnap.data();
+          const boundMo = String(binding.mainMoNumber || "").trim();
+          if (boundMo && boundMo.toUpperCase() !== String(mainMoNumber).toUpperCase()) {
+            throw new Error(
+              `TM Hasil ${resultTmNumber} sudah terikat ke MO Utama ${boundMo}, bukan ${mainMoNumber}.`
+            );
+          }
+        }
 
         const liveBatch = batchSnap.data();
         const releaseMeta = !isIncoming
@@ -4703,6 +5952,14 @@ Masukkan alasan override Super Admin:`
           qcUpdatedAt: inspectedAt,
           qcUpdatedBy: currentUser.username,
           qcDecision: qcForm.decision,
+          ...(!isIncoming
+            ? {
+                resultTmNumber,
+                tmResultStatus: resultTmNumber ? "ASSIGNED" : "PENDING_ADMIN",
+                resultTmAssignedAt: resultTmNumber ? inspectedAt : "",
+                resultTmAssignedBy: resultTmNumber ? currentUser.username : "",
+              }
+            : {}),
           ...releaseMeta,
         });
 
@@ -4715,6 +5972,17 @@ Masukkan alasan override Super Admin:`
             qcUpdatedBy: currentUser.username,
             ...(!isIncoming
               ? {
+                  resultTmNumber,
+                  tmResultStatus: resultTmNumber ? "ASSIGNED" : "PENDING_ADMIN",
+                  resultTmAssignedAt: resultTmNumber ? inspectedAt : "",
+                  resultTmAssignedBy: resultTmNumber ? currentUser.username : "",
+                  administrativeWarehouse:
+                    liveBatch.administrativeWarehouse ||
+                    (Array.isArray(liveBatch.administrativeWarehouses)
+                      ? liveBatch.administrativeWarehouses.join(", ")
+                      : ""),
+                  administrativeWarehouses: liveBatch.administrativeWarehouses || [],
+                  physicalLocation: getBatchPhysicalLocation(liveBatch, systemConfig),
                   qualityControl: {
                     ...(liveTx.qualityControl || {}),
                     releaseStatus: qcForm.decision,
@@ -4727,6 +5995,44 @@ Masukkan alasan override Super Admin:`
                   },
                 }
               : {}),
+          });
+        }
+
+        if (!isIncoming && resultTmNumber && tmBindingRef) {
+          const existingBinding = tmBindingSnap?.exists() ? tmBindingSnap.data() : {};
+          transaction.set(tmBindingRef, {
+            resultTmNumber,
+            mainMoNumber,
+            firstProductionAt:
+              existingBinding.firstProductionAt ||
+              relatedOperationalTx?.productionDate ||
+              relatedOperationalTx?.date ||
+              batch.productionDate ||
+              inspectedAt,
+            firstTransactionId:
+              existingBinding.firstTransactionId || relatedOperationalTx?.id || "",
+            firstBatchId: existingBinding.firstBatchId || batch.batchId,
+            lastProductionAt:
+              relatedOperationalTx?.productionDate || relatedOperationalTx?.date || inspectedAt,
+            lastTransactionId: relatedOperationalTx?.id || existingBinding.lastTransactionId || "",
+            lastBatchId: batch.batchId,
+            productionCount: Math.max(1, Number(existingBinding.productionCount || 0)),
+            assignedAt: existingBinding.assignedAt || inspectedAt,
+            assignedBy: existingBinding.assignedBy || currentUser.username,
+            updatedAt: inspectedAt,
+            updatedBy: currentUser.username,
+          });
+        }
+
+        if (!isIncoming && resultTmNumber) {
+          damageTxSnaps.forEach((snap, index) => {
+            if (!snap?.exists()) return;
+            transaction.update(damageTxRefs[index], {
+              resultTmNumber,
+              tmResultStatus: "ASSIGNED",
+              resultTmAssignedAt: inspectedAt,
+              resultTmAssignedBy: currentUser.username,
+            });
           });
         }
 
@@ -4755,12 +6061,49 @@ Masukkan alasan override Super Admin:`
     try { const logo=await loadPdfLogo(); const nw=Number(logo?.naturalWidth||logo?.width||1), nh=Number(logo?.naturalHeight||logo?.height||1); const scale=Math.min(120/nw,34/nh); pdf.addImage(logo,"PNG",L+12,28+(42-nh*scale)/2,nw*scale,nh*scale); } catch(error){ txt("BULOG",L+55,55,{size:19,bold:true,align:"center"}); }
     box(L,24,W,50); txt(title,pageW/2,47,{size:15,bold:true,align:"center"}); txt("Rekaman Quality Control Sistem Rebagging",pageW/2,62,{size:6.5,bold:true,align:"center"});
     let y=82;
-    const meta=[
+    const isMoIncoming = incoming && record.scope === "MO";
+    const meta=isMoIncoming ? [
+      ["No. Rekaman",record.id],
+      ["Tanggal QC",new Date(record.inspectedAt).toLocaleString("id-ID")],
+      ["No. MO",record.moNumber||"-"],
+      ["Jumlah TM Bahan",String(record.tmNumbers?.length||0)],
+      ["Jumlah Item / Batch",String(record.itemCount||record.batchIds?.length||0)],
+      ["TM Bahan",(record.tmNumbers||[]).join(", ")||record.tmNumber||"-"],
+      ["COA / Hasil Uji",record.coaNumber||"-"]
+    ] : [
       ["No. Rekaman",record.id],["Tanggal QC",new Date(record.inspectedAt).toLocaleString("id-ID")],["SKU / Produk",`${record.skuId} - ${record.skuName}`],["Batch",record.batchId],
       incoming?["MO / TM Bahan",`${record.moNumber||"-"} / ${record.tmNumber||"-"}`]:["MO Utama / TM Hasil",`${record.mainMoNumber||"-"} / ${record.resultTmNumber||"-"}`],
-      ["Gudang / Tumpukan",record.sourceWarehouse||record.targetStack||"-"],["Expiry",formatPdfDate(record.expiryDate)||"-"],["Qty Saat QC",`${formatStockNumber(record.qtySnapshot)} ${record.unit||""}`],["COA / Hasil Uji",record.coaNumber||"-"]
+      ["Gudang Administrasi",record.administrativeWarehouse||record.sourceWarehouse||"-"],["Lokasi Fisik / Tumpukan",`${record.physicalLocation||"-"}${record.targetStack?` / ${record.targetStack}`:""}`],["Expiry",formatPdfDate(record.expiryDate)||"-"],["Qty Saat QC",`${formatStockNumber(record.qtySnapshot)} ${record.unit||""}`],["COA / Hasil Uji",record.coaNumber||"-"]
     ];
     meta.forEach(([label,value])=>{box(L,y,W,18);txt(label,L+4,y+12,{size:6.2,bold:true});txt(":",L+120,y+12,{size:6.2});txt(value,L+130,y+12,{size:6.2,maxWidth:W-136,maxLines:1});y+=18;});
+
+    if (isMoIncoming && Array.isArray(record.items) && record.items.length > 0) {
+      y += 8;
+      box(L,y,W,18,242);
+      txt("DAFTAR TM / ITEM DALAM MO",L+4,y+12,{size:6.2,bold:true});
+      y += 18;
+      const cols=[72,158,62,105,W-397];
+      const xs=[L]; cols.forEach(w=>xs.push(xs[xs.length-1]+w));
+      box(L,y,W,18,248);
+      ["TM Bahan","SKU / Bahan / Batch","Qty","Gudang Admin","Lokasi Fisik"].forEach((label,i)=>txt(label,(xs[i]+xs[i+1])/2,y+12,{size:5.4,bold:true,align:"center"}));
+      y += 18;
+      const shown=record.items.slice(0,4);
+      shown.forEach(item=>{
+        box(L,y,W,28);
+        xs.slice(1,-1).forEach(x=>line(x,y,x,y+28,0.3));
+        txt(item.tmNumber||"-",xs[0]+3,y+11,{size:5.2,bold:true,maxWidth:cols[0]-6,maxLines:2});
+        txt(`${item.skuId||""} - ${item.skuName||""}\n${item.batchId||""}`,xs[1]+3,y+9,{size:4.9,maxWidth:cols[1]-6,maxLines:2});
+        txt(`${formatStockNumber(item.qtySnapshot)} ${item.unit||""}`,xs[2]+cols[2]-3,y+16,{size:5.1,bold:true,align:"right",maxWidth:cols[2]-6,maxLines:1});
+        txt(item.administrativeWarehouse||"-",xs[3]+3,y+11,{size:4.9,maxWidth:cols[3]-6,maxLines:2});
+        txt(item.physicalLocation||"-",xs[4]+3,y+11,{size:4.9,maxWidth:cols[4]-6,maxLines:2});
+        y += 28;
+      });
+      if (record.items.length > shown.length) {
+        box(L,y,W,16);
+        txt(`+ ${record.items.length-shown.length} item lainnya tersimpan pada rekaman digital QC ${record.id}`,L+4,y+11,{size:5.2,bold:true});
+        y += 16;
+      }
+    }
     y+=8; box(L,y,W,18,235); txt("PARAMETER PEMERIKSAAN",L+4,y+12,{size:6.5,bold:true}); y+=18;
     checksDef.forEach(([key,label],index)=>{box(L,y,W,22);txt(String(index+1),L+8,y+14,{size:6.2,bold:true});txt(label,L+28,y+14,{size:6.2,maxWidth:350,maxLines:1});txt(record.checks?.[key]?"SESUAI":"TIDAK SESUAI",R-80,y+14,{size:6.2,bold:true,align:"center"});y+=22;});
     y+=8;box(L,y,W,26,235);txt("KEPUTUSAN QC",L+4,y+17,{size:6.5,bold:true});txt(`${record.decision} / STATUS BATCH: ${record.batchStatus}`,R-5,y+17,{size:7,bold:true,align:"right"});y+=32;
@@ -4806,7 +6149,6 @@ Masukkan alasan override Super Admin:`
       "tm_mo_bindings",
       "batch_sequences",
       "result_tms",
-      "qc_records",
       "qc_records",
     ];
 
@@ -4909,6 +6251,7 @@ Masukkan alasan override Super Admin:`
         "tm_mo_bindings",
         "batch_sequences",
         "result_tms",
+        "qc_records",
       ];
       const chunkSize = 450;
 
@@ -4986,9 +6329,9 @@ Masukkan alasan override Super Admin:`
               </div>
 
               <div className="mt-10">
-                {systemConfig.logo ? (
+                {resolveLogoSource(systemConfig.logo) ? (
                   <div className="inline-flex rounded-2xl bg-white p-4 shadow-2xl shadow-black/20">
-                    <img src={systemConfig.logo} alt="Logo" className="h-14 w-auto object-contain" />
+                    <img src={resolveLogoSource(systemConfig.logo)} alt="Logo" className="h-14 w-auto object-contain" />
                   </div>
                 ) : (
                   <div className="inline-flex h-20 w-20 items-center justify-center rounded-2xl bg-red-600 shadow-xl shadow-red-950/40">
@@ -5023,9 +6366,9 @@ Masukkan alasan override Super Admin:`
             <div className="mx-auto w-full max-w-md">
               <div className="mb-8 lg:hidden">
                 <div className="flex items-center gap-4">
-                  {systemConfig.logo ? (
+                  {resolveLogoSource(systemConfig.logo) ? (
                     <div className="flex h-16 min-w-16 items-center justify-center rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-                      <img src={systemConfig.logo} alt="Logo" className="max-h-11 w-auto object-contain" />
+                      <img src={resolveLogoSource(systemConfig.logo)} alt="Logo" className="max-h-11 w-auto object-contain" />
                     </div>
                   ) : (
                     <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-600 text-white shadow-lg shadow-red-100">
@@ -5128,9 +6471,9 @@ Masukkan alasan override Super Admin:`
       {/* HEADER KHUSUS MOBILE (HP) */}
       <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center z-40 sticky top-0 shadow-md">
         <div className="flex items-center gap-3">
-          {systemConfig.logo ? (
+          {resolveLogoSource(systemConfig.logo) ? (
              <div className="bg-white p-1.5 rounded w-12 h-10 flex items-center justify-center">
-                <img src={systemConfig.logo} alt="logo" className="w-full h-full object-contain" />
+                <img src={resolveLogoSource(systemConfig.logo)} alt="logo" className="w-full h-full object-contain" />
              </div>
           ) : (
              <Package size={28} />
@@ -5152,9 +6495,9 @@ Masukkan alasan override Super Admin:`
         
         {/* LOGO DI DESKTOP */}
         <div className="p-6 border-b border-slate-800 flex flex-col items-center justify-center gap-5 text-center hidden md:flex mt-2">
-          {systemConfig.logo ? (
+          {resolveLogoSource(systemConfig.logo) ? (
             <div className="bg-white p-2.5 rounded-2xl w-10/12 flex justify-center shadow-lg hover:scale-105 transition-transform duration-300">
-               <img src={systemConfig.logo} alt="logo" className="h-12 w-auto object-contain" />
+               <img src={resolveLogoSource(systemConfig.logo)} alt="logo" className="h-12 w-auto object-contain" />
             </div>
           ) : (
             <Package size={36} />
@@ -5171,8 +6514,8 @@ Masukkan alasan override Super Admin:`
         <nav className="p-4 flex-1 space-y-1.5 text-sm mt-2">
           <button onClick={()=>handleNavClick("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
           <button onClick={()=>handleNavClick("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
-          {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
-          {hasAccess(["Super Admin", "Admin", "QC"]) && <button onClick={()=>handleNavClick("qc")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="qc"?"bg-emerald-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><CheckCircle size={18}/> Quality Control</button>}
+          {canAccessOperations() && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
+          {canPerform("qc") && <button onClick={()=>handleNavClick("qc")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="qc"?"bg-emerald-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><CheckCircle size={18}/> Quality Control</button>}
           <button onClick={()=>handleNavClick("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
           <button onClick={()=>handleNavClick("reports")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="reports"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><ClipboardList size={18}/> Laporan Produksi</button>
           {hasAccess(["Super Admin"]) && <button onClick={()=>handleNavClick("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
@@ -5207,251 +6550,243 @@ Masukkan alasan override Super Admin:`
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <div className="text-xs font-black uppercase tracking-[0.18em] text-red-500">
-                    Warehouse Overview
+                    Monitoring per MO
                   </div>
                   <h1 className="mt-1 text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                     Dashboard Persediaan
                   </h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                    Ringkasan stok aktif, status produk jadi, QC, dan risiko kedaluwarsa.
-                    Kuantitas ditampilkan per satuan agar KG, Pack, PCS, dan Karton tidak tercampur.
+                    Fokus pada bahan baku utama Beras/Gula dan hasil Rebagging.
+                    Kemasan, kardus, plastik, label, dan bahan pendukung tidak ditampilkan.
                   </p>
                 </div>
-                <div className="inline-flex items-center gap-2 self-start rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 shadow-sm">
-                  <Database size={14}/>
-                  {dashboardSummary.activeBatchCount.toLocaleString("id-ID")} batch aktif
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-                <div className="xl:col-span-2 overflow-hidden rounded-3xl border border-slate-200 bg-slate-900 p-5 sm:p-6 text-white shadow-xl shadow-slate-200/60">
-                  <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
-                        Total Persediaan Aktif
-                      </div>
-                      <h2 className="mt-2 text-2xl font-black">Stok Gudang Saat Ini</h2>
-                      <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">
-                        Bahan baku dan produk jadi dipisahkan berdasarkan satuan dan status agar saldo lebih mudah dibaca.
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-right">
-                      <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">SKU aktif</div>
-                      <div className="mt-1 text-2xl font-black">
-                        {dashboardSummary.skuRows.length.toLocaleString("id-ID")}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Bahan Baku / Kemasan</div>
-                          <div className="mt-1 text-sm font-bold text-white">{dashboardSummary.rawBatchCount} batch aktif</div>
-                        </div>
-                        <Database size={22} className="text-blue-300"/>
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {Object.entries(dashboardSummary.rawUnitTotals).length > 0 ? (
-                          Object.entries(dashboardSummary.rawUnitTotals).map(([unit,total])=>(
-                            <div key={unit} className="rounded-xl bg-white/10 px-3 py-2">
-                              <div className="text-lg font-black">{Number(total).toLocaleString("id-ID")}</div>
-                              <div className="text-[10px] font-black uppercase text-slate-400">{unit}</div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-sm text-slate-400">Belum ada stok bahan aktif.</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Produk Jadi</div>
-                          <div className="mt-1 text-sm font-bold text-white">{dashboardSummary.finishedBatchCount} batch aktif</div>
-                        </div>
-                        <Boxes size={22} className="text-emerald-300"/>
-                      </div>
-                      <div className="mt-4 grid grid-cols-2 gap-2">
-                        <div className="rounded-xl bg-emerald-400/10 px-3 py-2">
-                          <div className="text-lg font-black text-emerald-300">{dashboardSummary.totalFinishedPack.toLocaleString("id-ID")}</div>
-                          <div className="text-[10px] font-black uppercase text-slate-400">Pack total</div>
-                        </div>
-                        <div className="rounded-xl bg-blue-400/10 px-3 py-2">
-                          <div className="text-lg font-black text-blue-300">{dashboardSummary.totalFinishedKg.toLocaleString("id-ID", {maximumFractionDigits:2})}</div>
-                          <div className="text-[10px] font-black uppercase text-slate-400">Kg netto</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Quality Control</div>
-                      <h3 className="mt-1 text-lg font-black text-slate-900">Status QC</h3>
-                    </div>
-                    <CheckCircle size={24} className="text-emerald-600"/>
-                  </div>
-                  <div className="mt-5 grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl bg-blue-50 p-3">
-                      <div className="text-[10px] font-black text-blue-500">PENDING BAHAN</div>
-                      <div className="mt-1 text-2xl font-black text-blue-800">{dashboardSummary.pendingIncomingQc}</div>
-                    </div>
-                    <div className="rounded-2xl bg-emerald-50 p-3">
-                      <div className="text-[10px] font-black text-emerald-500">PENDING PRODUK</div>
-                      <div className="mt-1 text-2xl font-black text-emerald-800">{dashboardSummary.pendingFinishedQc}</div>
-                    </div>
-                    <div className="rounded-2xl bg-amber-50 p-3">
-                      <div className="text-[10px] font-black text-amber-600">HOLD</div>
-                      <div className="mt-1 text-2xl font-black text-amber-800">{dashboardSummary.holdQc}</div>
-                    </div>
-                    <div className="rounded-2xl bg-red-50 p-3">
-                      <div className="text-[10px] font-black text-red-500">REJECT</div>
-                      <div className="mt-1 text-2xl font-black text-red-800">{dashboardSummary.rejectedQc}</div>
-                    </div>
-                  </div>
-                  {hasAccess(["Super Admin","Admin","QC"]) && (
-                    <button
-                      type="button"
-                      onClick={()=>handleNavClick("qc")}
-                      className="mt-4 w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-black text-emerald-700 hover:bg-emerald-100"
-                    >
-                      Buka Quality Control
-                    </button>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  onClick={()=>handleNavClick("inventory")}
+                  className="self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-600 shadow-sm hover:bg-slate-50"
+                >
+                  Inventori Lengkap
+                </button>
               </div>
 
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                  <div className="text-[10px] font-black uppercase tracking-wider text-emerald-600">GOOD / Siap Stok</div>
-                  <div className="mt-2 text-2xl font-black text-emerald-800">{dashboardSummary.goodPack.toLocaleString("id-ID")} <span className="text-xs font-bold">Pack</span></div>
-                  <div className="mt-1 text-xs font-bold text-emerald-600">{dashboardSummary.goodKg.toLocaleString("id-ID",{maximumFractionDigits:2})} Kg netto</div>
+                <div className="rounded-2xl border border-blue-200 bg-white p-4 shadow-sm">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-blue-500">Sisa Bahan Utama</div>
+                  <div className="mt-2 text-2xl font-black text-slate-900">
+                    {moDashboardData.totalRawCurrentKg.toLocaleString("id-ID",{maximumFractionDigits:2})}
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-slate-400">KG Beras / Gula</div>
                 </div>
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-emerald-500">Produk Jadi GOOD</div>
+                  <div className="mt-2 text-2xl font-black text-slate-900">
+                    {moDashboardData.totalGoodPack.toLocaleString("id-ID")}
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-slate-400">Pack tersedia</div>
+                </div>
+                <div className="rounded-2xl border border-amber-200 bg-white p-4 shadow-sm">
                   <div className="text-[10px] font-black uppercase tracking-wider text-amber-600">PROCESS</div>
-                  <div className="mt-2 text-2xl font-black text-amber-800">{dashboardSummary.processPack.toLocaleString("id-ID")} <span className="text-xs font-bold">Pack</span></div>
-                  <div className="mt-1 text-xs font-bold text-amber-600">{dashboardSummary.processKg.toLocaleString("id-ID",{maximumFractionDigits:2})} Kg</div>
+                  <div className="mt-2 text-2xl font-black text-slate-900">
+                    {moDashboardData.totalProcessPack.toLocaleString("id-ID")}
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-slate-400">Pack perlu tindak lanjut</div>
                 </div>
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                  <div className="text-[10px] font-black uppercase tracking-wider text-red-600">DAMAGE</div>
-                  <div className="mt-2 text-2xl font-black text-red-800">{dashboardSummary.damagePack.toLocaleString("id-ID")} <span className="text-xs font-bold">Pack</span></div>
-                  <div className="mt-1 text-xs font-bold text-red-600">{dashboardSummary.damageKg.toLocaleString("id-ID",{maximumFractionDigits:2})} Kg</div>
-                </div>
-                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                  <div className="text-[10px] font-black uppercase tracking-wider text-blue-600">RELEASED FG</div>
-                  <div className="mt-2 text-2xl font-black text-blue-800">{dashboardSummary.releasedFinished}</div>
-                  <div className="mt-1 text-xs font-bold text-blue-600">batch produk jadi released</div>
+                <div className="rounded-2xl border border-red-200 bg-white p-4 shadow-sm">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-red-500">Perlu Perhatian</div>
+                  <div className="mt-2 text-2xl font-black text-slate-900">
+                    {moDashboardData.attentionCount.toLocaleString("id-ID")}
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-slate-400">QC / Hold / Reject / Damage</div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <div className="lg:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Distribusi Lokasi</div>
-                      <h3 className="mt-1 font-black text-slate-900">Persediaan Berdasarkan Gudang / Tumpukan</h3>
-                    </div>
-                    <Boxes size={22} className="text-slate-400"/>
+              <div className="space-y-4">
+                <div>
+                  <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+                    Persediaan Berdasarkan MO
                   </div>
-                  <div className="mt-4 h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={stockByWarehouseData} margin={{ top: 15, right: 15, left: 5, bottom: 25 }}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false}/>
-                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill:"#64748b",fontSize:11}} angle={-12} textAnchor="end" height={55}/>
-                        <YAxis axisLine={false} tickLine={false} tick={{fill:"#64748b",fontSize:11}}/>
-                        <Tooltip cursor={{fill:"#f8fafc"}} contentStyle={{borderRadius:"14px",border:"1px solid #e2e8f0",boxShadow:"0 10px 30px rgb(15 23 42 / .08)"}}/>
-                        <Legend iconType="circle"/>
-                        <Bar dataKey="kg" fill="#ef4444" name="Kg" maxBarSize={48} radius={[8,8,0,0]}/>
-                        <Bar dataKey="pack" fill="#3b82f6" name="Pack" maxBarSize={48} radius={[8,8,0,0]}/>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                  <h2 className="mt-1 text-lg font-black text-slate-900">
+                    Alur Bahan Baku → Rebagging → Produk Jadi
+                  </h2>
                 </div>
 
-                <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Expiry Monitor</div>
-                      <h3 className="mt-1 font-black text-slate-900">Kedaluwarsa Batch Aktif</h3>
-                    </div>
-                    <ShieldAlert size={23} className="text-amber-500"/>
-                  </div>
-                  <div className="mt-5 space-y-3">
-                    <div className="flex items-center justify-between rounded-xl bg-red-50 px-4 py-3">
-                      <div><div className="text-xs font-black text-red-700">EXPIRED</div><div className="text-[10px] text-red-500">perlu tindakan segera</div></div>
-                      <div className="text-2xl font-black text-red-800">{dashboardSummary.expiredCount}</div>
-                    </div>
-                    <div className="flex items-center justify-between rounded-xl bg-orange-50 px-4 py-3">
-                      <div><div className="text-xs font-black text-orange-700">≤ 30 HARI</div><div className="text-[10px] text-orange-500">prioritas FEFO</div></div>
-                      <div className="text-2xl font-black text-orange-800">{dashboardSummary.nearExpired30}</div>
-                    </div>
-                    <div className="flex items-center justify-between rounded-xl bg-amber-50 px-4 py-3">
-                      <div><div className="text-xs font-black text-amber-700">31–90 HARI</div><div className="text-[10px] text-amber-500">perlu monitoring</div></div>
-                      <div className="text-2xl font-black text-amber-800">{dashboardSummary.nearExpired90}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+                {moDashboardData.moRows.map((group)=>(
+                  <details
+                    key={group.mo}
+                    className="group overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
+                  >
+                    <summary className="cursor-pointer list-none p-5 sm:p-6 hover:bg-slate-50/70">
+                      <div className="flex flex-col gap-5">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-lg bg-violet-100 px-3 py-1.5 font-mono text-xs font-black text-violet-700">
+                                {String(group.mo).trim().toUpperCase().startsWith("MO") ? group.mo : `MO ${group.mo}`}
+                              </span>
+                              <span className="text-xs font-bold text-slate-400">
+                                {group.warehouses.length} gudang/SKU sumber · {group.finishedWarehouseRows.length} produk/gudang · {group.productRows.length} batch aktif
+                              </span>
+                            </div>
+                            <div className="mt-3 text-sm font-bold text-slate-700">
+                              {group.warehouses.map(row=>row.name).filter((value,index,array)=>array.indexOf(value)===index).join(" · ") || "Bahan utama tidak aktif"}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-400">
+                              {group.warehouses.map(row=>row.warehouse).filter((value,index,array)=>array.indexOf(value)===index).join(" · ") || "Gudang asal tidak tersedia"}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-500">
+                            Klik untuk lihat detail
+                          </div>
+                        </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                <div className="flex flex-col gap-2 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Inventory Snapshot</div>
-                    <h3 className="mt-1 font-black text-slate-900">Ringkasan Persediaan per SKU</h3>
+                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                          <div>
+                            <div className="text-[10px] font-black uppercase text-slate-400">Stok Awal</div>
+                            <div className="mt-1 text-lg font-black text-slate-900">
+                              {group.rawInitialKg.toLocaleString("id-ID",{maximumFractionDigits:2})} <span className="text-[10px] text-slate-400">KG</span>
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-black uppercase text-slate-400">Sudah Direbag</div>
+                            <div className="mt-1 text-lg font-black text-blue-700">
+                              {group.rawUsedKg.toLocaleString("id-ID",{maximumFractionDigits:2})} <span className="text-[10px] text-slate-400">KG</span>
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-black uppercase text-slate-400">Sisa Bahan</div>
+                            <div className="mt-1 text-lg font-black text-emerald-700">
+                              {group.rawCurrentKg.toLocaleString("id-ID",{maximumFractionDigits:2})} <span className="text-[10px] text-slate-400">KG</span>
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-black uppercase text-slate-400">Produk Jadi GOOD</div>
+                            <div className="mt-1 text-lg font-black text-emerald-700">
+                              {group.currentGoodPack.toLocaleString("id-ID")} <span className="text-[10px] text-slate-400">PACK</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="mb-1.5 flex items-center justify-between text-[10px] font-black uppercase tracking-wide">
+                            <span className="text-slate-400">Progress pemakaian bahan utama</span>
+                            <span className="text-slate-600">{group.progress.toFixed(1)}%</span>
+                          </div>
+                          <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                            <div
+                              className="h-full rounded-full bg-blue-600 transition-all"
+                              style={{width: `${group.progress}%`}}
+                            />
+                          </div>
+                          {group.rawDamageKg > 0 && (
+                            <div className="mt-1.5 text-[10px] font-bold text-red-500">
+                              Waste/Damage bahan utama: {group.rawDamageKg.toLocaleString("id-ID",{maximumFractionDigits:2})} KG
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </summary>
+
+                    <div className="border-t border-slate-200 bg-slate-50/60 p-4 sm:p-6 space-y-6">
+                      <div>
+                        <h3 className="font-black text-slate-900">Bahan Baku per Gudang Administrasi</h3>
+                        <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                          <table className="w-full min-w-[920px] text-sm">
+                            <thead className="bg-slate-50 text-slate-500">
+                              <tr>
+                                <th className="p-3 text-left">Gudang Administrasi</th>
+                                <th className="p-3 text-left">Lokasi Fisik</th>
+                                <th className="p-3 text-left">Bahan</th>
+                                <th className="p-3 text-left">TM Bahan</th>
+                                <th className="p-3 text-right">Stok Awal</th>
+                                <th className="p-3 text-right">Dipakai Rebag</th>
+                                <th className="p-3 text-right">Waste</th>
+                                <th className="p-3 text-right">Sisa</th>
+                                <th className="p-3 text-center">QC</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {group.warehouses.map(row=>(
+                                <tr key={row.key}>
+                                  <td className="p-3 font-bold text-slate-700">{row.warehouse}</td>
+                                  <td className="p-3 font-bold text-cyan-700">{row.physicalLocation}</td>
+                                  <td className="p-3">
+                                    <div className="font-mono text-[10px] font-black text-blue-600">{row.skuId}</div>
+                                    <div className="mt-1 font-bold text-slate-900">{row.name}</div>
+                                  </td>
+                                  <td className="p-3 text-xs font-bold text-slate-600">{row.sourceTm || "-"}</td>
+                                  <td className="p-3 text-right font-bold">{row.initialQty.toLocaleString("id-ID")} {row.unit}</td>
+                                  <td className="p-3 text-right font-black text-blue-700">{row.usedQty.toLocaleString("id-ID")} {row.unit}</td>
+                                  <td className="p-3 text-right font-bold text-red-600">{row.damageQty ? row.damageQty.toLocaleString("id-ID") : "-"} {row.damageQty ? row.unit : ""}</td>
+                                  <td className="p-3 text-right font-black text-emerald-700">{row.currentQty.toLocaleString("id-ID")} {row.unit}</td>
+                                  <td className="p-3 text-center text-[10px] font-black text-slate-500">{row.qcStatus}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="font-black text-slate-900">Produk Jadi · {String(group.mo).trim().toUpperCase().startsWith("MO") ? group.mo : `MO ${group.mo}`}</h3>
+                          <div className="text-xs font-bold text-slate-500">
+                            Produksi kumulatif: {group.producedPack.toLocaleString("id-ID")} Pack
+                          </div>
+                        </div>
+                        <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                          <table className="w-full min-w-[1040px] text-sm">
+                            <thead className="bg-slate-50 text-slate-500">
+                              <tr>
+                                <th className="p-3 text-left">Produk</th>
+                                <th className="p-3 text-left">Gudang Administrasi</th>
+                                <th className="p-3 text-left">Lokasi Fisik</th>
+                                <th className="p-3 text-left">Tumpukan</th>
+                                <th className="p-3 text-left">TM Hasil</th>
+                                <th className="p-3 text-center">Batch</th>
+                                <th className="p-3 text-right">GOOD</th>
+                                <th className="p-3 text-right">PROCESS</th>
+                                <th className="p-3 text-right">DAMAGE</th>
+                                <th className="p-3 text-right">TOTAL</th>
+                                <th className="p-3 text-center">QC</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {group.finishedWarehouseRows.map(row=>(
+                                <tr key={row.key}>
+                                  <td className="p-3">
+                                    <div className="font-mono text-[10px] font-black text-emerald-600">{row.skuId}</div>
+                                    <div className="mt-1 font-bold text-slate-900">{row.name}</div>
+                                  </td>
+                                  <td className="p-3 font-bold text-slate-700">{row.administrativeWarehouse}</td>
+                                  <td className="p-3 font-bold text-cyan-700">{row.physicalLocation}</td>
+                                  <td className="p-3 font-bold text-slate-600">{row.targetStack}</td>
+                                  <td className="p-3 text-xs font-bold text-violet-700">{row.tmResult || "MENUNGGU QC/ADMIN"}</td>
+                                  <td className="p-3 text-center font-bold text-slate-600">{row.batchCount}</td>
+                                  <td className="p-3 text-right font-black text-emerald-700">{row.good.toLocaleString("id-ID")}</td>
+                                  <td className="p-3 text-right font-bold text-amber-700">{row.process ? row.process.toLocaleString("id-ID") : "-"}</td>
+                                  <td className="p-3 text-right font-bold text-red-700">{row.damage ? row.damage.toLocaleString("id-ID") : "-"}</td>
+                                  <td className="p-3 text-right font-black text-slate-900">{row.total.toLocaleString("id-ID")}</td>
+                                  <td className="p-3 text-center text-[10px] font-black text-slate-500">{row.qcStatus}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {group.finishedWarehouseRows.length===0 && (
+                            <div className="p-6 text-center text-xs italic text-slate-400">
+                              Belum ada stok produk jadi aktif untuk MO ini.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                ))}
+
+                {moDashboardData.moRows.length===0 && (
+                  <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm italic text-slate-400">
+                    Belum ada data MO bahan baku Beras/Gula untuk ditampilkan.
                   </div>
-                  <button type="button" onClick={()=>handleNavClick("inventory")} className="self-start rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-black text-slate-600 hover:bg-slate-100">
-                    Lihat Inventori Lengkap
-                  </button>
-                </div>
-                <div className="max-h-[420px] overflow-auto">
-                  <table className="w-full min-w-[820px] text-sm">
-                    <thead className="sticky top-0 bg-slate-50 text-slate-500">
-                      <tr>
-                        <th className="p-3 text-left">SKU / Produk</th>
-                        <th className="p-3 text-left">Kategori</th>
-                        <th className="p-3 text-center">Batch</th>
-                        <th className="p-3 text-right">GOOD / Stok</th>
-                        <th className="p-3 text-right">PROCESS</th>
-                        <th className="p-3 text-right">DAMAGE</th>
-                        <th className="p-3 text-center">Pending QC</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {dashboardSummary.skuRows.map(row=>(
-                        <tr key={row.id} className="hover:bg-slate-50">
-                          <td className="p-3">
-                            <div className="font-mono text-[10px] font-black text-blue-600">{row.id}</div>
-                            <div className="mt-1 font-bold text-slate-800">{row.name}</div>
-                          </td>
-                          <td className="p-3">
-                            <span className={"rounded-full px-2.5 py-1 text-[10px] font-black " + (row.type==="rebagged"?"bg-emerald-50 text-emerald-700":"bg-blue-50 text-blue-700")}>
-                              {row.type==="rebagged"?"PRODUK JADI":"BAHAN"}
-                            </span>
-                          </td>
-                          <td className="p-3 text-center font-bold text-slate-600">{row.batchCount}</td>
-                          <td className="p-3 text-right font-black text-emerald-700">{row.good.toLocaleString("id-ID")} <span className="text-[10px] text-slate-400">{row.unit}</span></td>
-                          <td className="p-3 text-right font-bold text-amber-700">{row.process ? row.process.toLocaleString("id-ID") : "-"}</td>
-                          <td className="p-3 text-right font-bold text-red-700">{row.damage ? row.damage.toLocaleString("id-ID") : "-"}</td>
-                          <td className="p-3 text-center">
-                            {row.pendingQc > 0 ? (
-                              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black text-amber-700">{row.pendingQc}</span>
-                            ) : (
-                              <span className="text-xs font-bold text-slate-300">0</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {dashboardSummary.skuRows.length===0 && (
-                    <div className="p-10 text-center text-sm italic text-slate-400">Belum ada persediaan aktif.</div>
-                  )}
-                </div>
+                )}
               </div>
             </div>
           )}
@@ -5482,7 +6817,8 @@ Masukkan alasan override Super Admin:`
                     <tr>
                       <th className="p-4 font-semibold whitespace-nowrap">ID SKU</th>
                       <th className="p-4 font-semibold whitespace-nowrap">Nama Barang</th>
-                      <th className="p-4 font-semibold whitespace-nowrap">Gudang Asal</th>
+                      <th className="p-4 font-semibold whitespace-nowrap">Gudang Administrasi</th>
+                      <th className="p-4 font-semibold whitespace-nowrap">Lokasi Fisik</th>
                       {activeInvTab === 'rebagged' ? (
                         <>
                           <th className="p-4 font-semibold text-right whitespace-nowrap text-green-700">GOOD</th>
@@ -5533,12 +6869,31 @@ Masukkan alasan override Super Admin:`
                           },0)
                         : 0;
                       const totalKg = goodKg + processKg + damageKg;
-                      const sources = [...new Set(batches.map(b=>b.sourceWarehouse).filter(Boolean))].join(", ") || "-";
+                      const administrativeSources = [
+                        ...new Set(
+                          batches
+                            .map(b=>
+                              b.administrativeWarehouse ||
+                              (Array.isArray(b.administrativeWarehouses)
+                                ? b.administrativeWarehouses.join(", ")
+                                : getBatchAdministrativeWarehouse(b, sku, systemConfig))
+                            )
+                            .filter(Boolean)
+                        )
+                      ].join(", ") || "-";
+                      const physicalLocations = [
+                        ...new Set(
+                          batches
+                            .map(b=>getBatchPhysicalLocation(b, systemConfig))
+                            .filter(Boolean)
+                        )
+                      ].join(", ") || "-";
                       return (
                         <tr key={sku.id} className="hover:bg-slate-50 transition-colors">
                           <td className="p-4 text-slate-500 font-mono">{sku.id}</td>
                           <td className="p-4 font-semibold text-slate-800">{sku.name}</td>
-                          <td className="p-4 text-slate-600">{sources}</td>
+                          <td className="p-4 text-slate-600">{administrativeSources}</td>
+                          <td className="p-4 font-bold text-cyan-700">{physicalLocations}</td>
                           {activeInvTab === 'rebagged' ? (
                             <>
                               <td className="p-4 text-right">
@@ -5583,30 +6938,36 @@ Masukkan alasan override Super Admin:`
           )}
 
           {/* OPERATIONS */}
-          {activeMenu === "operations" && hasAccess(["Super Admin", "Admin", "Operator"]) && (
+          {activeMenu === "operations" && canAccessOperations() && (
             <div className="space-y-6">
                <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Operasi Logistik</h1>
                <div className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200">
                   <div className="mb-8 overflow-x-auto pb-1">
                     <div className="inline-flex min-w-max items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
-                      <button
+                      {canPerform("inbound") && <button
                         onClick={()=>setActiveOpTab('inbound')}
                         className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='inbound'?'bg-blue-600 text-white shadow-lg shadow-blue-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                       >
                         <PackagePlus size={17}/> Inbound
-                      </button>
-                      <button
+                      </button>}
+                      {canPerform("rebagging") && <button
                         onClick={()=>setActiveOpTab('rebagging')}
                         className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='rebagging'?'bg-red-600 text-white shadow-lg shadow-red-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                       >
                         <Settings2 size={17}/> Rebagging
-                      </button>
-                      <button
+                      </button>}
+                      {canPerform("mutation") && <button
+                        onClick={()=>setActiveOpTab('internal_move')}
+                        className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='internal_move'?'bg-cyan-600 text-white shadow-lg shadow-cyan-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                      >
+                        <ArrowRightLeft size={17}/> Mutasi Internal
+                      </button>}
+                      {canPerform("outbound") && <button
                         onClick={()=>setActiveOpTab('outbound')}
                         className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='outbound'?'bg-orange-500 text-white shadow-lg shadow-orange-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                       >
                         <ArrowRightLeft size={17}/> Outbound
-                      </button>
+                      </button>}
                     </div>
                   </div>
                   <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-3xl">
@@ -5630,7 +6991,7 @@ Masukkan alasan override Super Admin:`
                           />
                           <div>
                             <div className="font-black text-amber-900 text-sm">Mode Backdate — Khusus Super Admin</div>
-                            <div className="text-xs text-amber-700">Berlaku untuk Inbound, Rebagging, dan Outbound.</div>
+                            <div className="text-xs text-amber-700">Berlaku untuk Inbound, Mutasi Internal, Rebagging, dan Outbound.</div>
                           </div>
                         </label>
                         {formData.useBackdate && (
@@ -5659,7 +7020,7 @@ Masukkan alasan override Super Admin:`
                             <div>
                               <h3 className="font-black text-blue-900">Inbound Multi-SKU</h3>
                               <p className="mt-1 text-xs leading-5 text-blue-700">
-                                Satu penerimaan dapat berisi beberapa SKU. Setiap SKU menyimpan batch, MO, TM bahan, qty, dan gudang asalnya sendiri.
+                                Satu penerimaan dapat berisi beberapa SKU. Gudang Administrasi dan Lokasi Fisik dicatat terpisah. Untuk kemasan/kardus, Gudang Administrasi otomatis mengikuti Lokasi Fisik yang dipilih.
                               </p>
                             </div>
                           </div>
@@ -5708,16 +7069,51 @@ Masukkan alasan override Super Admin:`
                                   />
                                 </div>
                                 <div>
-                                  <label className="block text-sm font-bold text-slate-700 mb-2">Gudang Asal</label>
-                                  <input
-                                    type="text"
-                                    className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-blue-500"
-                                    value={line.sourceWarehouse}
-                                    onChange={e=>updateInboundLine(line.rowId,'sourceWarehouse',e.target.value)}
-                                    placeholder="Contoh: GST I / Gudang asal lain"
-                                    required
-                                  />
+                                  <label className="block text-sm font-bold text-slate-700 mb-2">Gudang Administrasi / Asal</label>
+                                  {(() => {
+                                    const selectedSku = skus.find((s) => s.id === line.skuId);
+                                    const supportMaterial = isPackagingMaterialSku(selectedSku);
+                                    const selectedPhysical = locations.find((location)=>location.id===line.physicalLocationId);
+                                    return (
+                                      <>
+                                        <input
+                                          type="text"
+                                          className={`w-full p-3 border rounded-lg outline-none ${supportMaterial ? "border-cyan-200 bg-cyan-50 font-bold text-cyan-800" : "border-slate-300 focus:border-blue-500"}`}
+                                          value={supportMaterial ? (getLocationDisplayName(selectedPhysical) || "Pilih Lokasi Fisik") : line.sourceWarehouse}
+                                          onChange={e=>!supportMaterial && updateInboundLine(line.rowId,'sourceWarehouse',e.target.value)}
+                                          placeholder="Contoh: GST I / Unit 18"
+                                          readOnly={supportMaterial}
+                                          required={!supportMaterial}
+                                        />
+                                        <p className="mt-1.5 text-[10px] leading-4 text-slate-400">
+                                          {supportMaterial
+                                            ? "Kemasan/kardus tidak mewarisi Gudang Administrasi bahan utama. Nilainya mengikuti lokasi fisik stok kemasan."
+                                            : "Gudang ini tetap menjadi pemilik stok secara administrasi meskipun barang dipindahkan ke lokasi proses."}
+                                        </p>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
+                              </div>
+
+                              <div>
+                                <label className="block text-sm font-bold text-cyan-700 mb-2">Lokasi Fisik Saat Diterima</label>
+                                <select
+                                  className="w-full p-3 border border-cyan-300 bg-cyan-50/40 rounded-lg outline-none focus:border-cyan-600 font-bold text-cyan-900"
+                                  value={line.physicalLocationId || ""}
+                                  onChange={e=>updateInboundLine(line.rowId,'physicalLocationId',e.target.value)}
+                                  required
+                                >
+                                  <option value="">-- Pilih Lokasi Fisik --</option>
+                                  {locations.filter(location=>location.active!==false && locationSupportsStorage(location)).map(location=>(
+                                    <option key={location.id} value={location.id}>
+                                      {location.code || location.id} · {getLocationDisplayName(location)} · {location.type}
+                                    </option>
+                                  ))}
+                                </select>
+                                <p className="mt-1.5 text-[10px] leading-4 text-cyan-700">
+                                  Ini adalah posisi fisik barang, terpisah dari Gudang Administrasi.
+                                </p>
                               </div>
 
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -5805,6 +7201,49 @@ Masukkan alasan override Super Admin:`
                           </div>
                         )}
 
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-black text-red-700 mb-2">Lokasi Proses Rebagging</label>
+                            <select
+                              className="w-full p-3 border border-red-300 bg-red-50/30 rounded-lg outline-none focus:border-red-600 font-bold"
+                              value={formData.rebagProcessingLocationId || ""}
+                              onChange={e=>setFormData(prev=>({
+                                ...prev,
+                                rebagProcessingLocationId:e.target.value,
+                                rebagFinishedLocationId: prev.rebagFinishedLocationId || e.target.value,
+                              }))}
+                              required
+                            >
+                              <option value="">-- Pilih Lokasi Proses --</option>
+                              {locations
+                                .filter(location=>locationSupportsRebag(location,selectedRebagTargetSku))
+                                .map(location=>(
+                                  <option key={location.id} value={location.id}>
+                                    {location.code || location.id} · {getLocationDisplayName(location)} · {location.type}
+                                  </option>
+                                ))}
+                            </select>
+                            <p className="mt-1.5 text-[10px] text-slate-500">Bisa UP, RTR, GBB, atau Multi Purpose sesuai fungsi di Master Lokasi.</p>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-black text-cyan-700 mb-2">Lokasi Produk Jadi</label>
+                            <select
+                              className="w-full p-3 border border-cyan-300 bg-cyan-50/30 rounded-lg outline-none focus:border-cyan-600 font-bold"
+                              value={formData.rebagFinishedLocationId || ""}
+                              onChange={e=>setFormData(prev=>({...prev,rebagFinishedLocationId:e.target.value}))}
+                              required
+                            >
+                              <option value="">-- Pilih Lokasi Produk Jadi --</option>
+                              {locations.filter(location=>locationSupportsStorage(location)).map(location=>(
+                                <option key={location.id} value={location.id}>
+                                  {location.code || location.id} · {getLocationDisplayName(location)}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="mt-1.5 text-[10px] text-slate-500">Default mengikuti lokasi proses, tetapi dapat dipilih lokasi penyimpanan lain.</p>
+                          </div>
+                        </div>
+
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-2">Kuantitas Hasil yang Diproses</label>
                           <input type="number" min="0" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.qtyToProcess} onChange={e=>setFormData({...formData,qtyToProcess:e.target.value})} placeholder="0" required/>
@@ -5835,7 +7274,15 @@ Masukkan alasan override Super Admin:`
                                 : new Date();
                               const batchOptions=sortBatchesFefoFifo(
                                 inventoryBatches.filter(
-                                  b=>b.skuId===materialSkuId && Number(b.currentQty||0)>0 && isRawBatchQcUsable(b)
+                                  b=>{
+                                    if (!(b.skuId===materialSkuId && Number(b.currentQty||0)>0 && isRawBatchQcUsable(b))) return false;
+                                    if (!formData.rebagProcessingLocationId) return true;
+                                    const processLocation=locations.find(location=>location.id===formData.rebagProcessingLocationId);
+                                    if (!processLocation) return true;
+                                    return b.physicalLocationId
+                                      ? b.physicalLocationId===processLocation.id
+                                      : getBatchPhysicalLocation(b,systemConfig).toUpperCase()===getLocationDisplayName(processLocation).toUpperCase();
+                                  }
                                 ),
                                 referenceDate
                               );
@@ -5936,7 +7383,7 @@ Masukkan alasan override Super Admin:`
                                                     (info.isExpired && !isVerifiedSuperAdmin)
                                                   }
                                                 >
-                                                  [{label}] {b.sourceWarehouse||'-'} · MO: {b.moNumber||'-'} · TM: {b.tmNumber||'-'} · Stok: {b.currentQty}{b.expiryDate ? ` · Exp: ${formatPdfDate(b.expiryDate)}` : ''}
+                                                  [{label}] Fisik: {getBatchPhysicalLocation(b,systemConfig)||'-'} · Admin: {getBatchAdministrativeWarehouse(b,materialSku,systemConfig)||'-'} · MO: {b.moNumber||'-'} · TM: {b.tmNumber||'-'} · Stok: {b.currentQty}{b.expiryDate ? ` · Exp: ${formatPdfDate(b.expiryDate)}` : ''}
                                                 </option>
                                               );
                                             })}
@@ -5993,7 +7440,8 @@ Masukkan alasan override Super Admin:`
                                             <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
                                               <span className="rounded-lg bg-blue-50 px-2.5 py-1.5 font-bold text-blue-700">MO: {selectedBatch.moNumber||'-'}</span>
                                               <span className="rounded-lg bg-violet-50 px-2.5 py-1.5 font-bold text-violet-700">TM: {selectedBatch.tmNumber||'-'}</span>
-                                              <span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-bold text-slate-600">Gudang: {selectedBatch.sourceWarehouse||'-'}</span>
+                                              <span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-bold text-slate-600">Admin: {getBatchAdministrativeWarehouse(selectedBatch, materialSku, systemConfig)||'-'}</span>
+                                              <span className="rounded-lg bg-cyan-50 px-2.5 py-1.5 font-bold text-cyan-700">Fisik: {getBatchPhysicalLocation(selectedBatch, systemConfig)||'-'}</span>
                                               <span className={`rounded-lg px-2.5 py-1.5 font-black ${expiryInfo.isExpired?'bg-red-100 text-red-700':expiryInfo.daysRemaining!==null && expiryInfo.daysRemaining<=30?'bg-orange-100 text-orange-700':expiryInfo.daysRemaining!==null && expiryInfo.daysRemaining<=90?'bg-amber-100 text-amber-700':'bg-green-50 text-green-700'}`}>
                                                 {recommendation}{expiryInfo.daysRemaining!==null ? ` · ${expiryInfo.daysRemaining} hari` : ''}
                                               </span>
@@ -6065,7 +7513,15 @@ Masukkan alasan override Super Admin:`
                                 <label className="block text-sm font-bold text-slate-700 mb-2">Batch Bahan Baku</label>
                                 <SearchableSelect
                                   options={sortBatchesFefoFifo(
-                                    inventoryBatches.filter(b=>b.skuId===formData.bulkSkuId && Number(b.currentQty||0)>0 && isRawBatchQcUsable(b))
+                                    inventoryBatches.filter(b=>{
+                                      if (!(b.skuId===formData.bulkSkuId && Number(b.currentQty||0)>0 && isRawBatchQcUsable(b))) return false;
+                                      if (!formData.rebagProcessingLocationId) return true;
+                                      const processLocation=locations.find(location=>location.id===formData.rebagProcessingLocationId);
+                                      if (!processLocation) return true;
+                                      return b.physicalLocationId
+                                        ? b.physicalLocationId===processLocation.id
+                                        : getBatchPhysicalLocation(b,systemConfig).toUpperCase()===getLocationDisplayName(processLocation).toUpperCase();
+                                    })
                                   ).map(b=>({
                                     value:b.batchId,
                                     label:`[${getBatchRecommendationLabel(b,inventoryBatches.filter(x=>x.skuId===formData.bulkSkuId && Number(x.currentQty||0)>0))}] ${b.sourceWarehouse||'-'} · MO: ${b.moNumber||'-'} · TM: ${b.tmNumber||'-'} · Stok: ${b.currentQty}${b.expiryDate?` · Exp: ${formatPdfDate(b.expiryDate)}`:''}`
@@ -6079,19 +7535,20 @@ Masukkan alasan override Super Admin:`
                           </>
                         )}
 
-                        <div className="rounded-2xl border border-green-200 bg-green-50/60 p-4">
-                          <label className="block text-sm font-black text-green-900 mb-2">TM Hasil</label>
-                          <input
-                            type="text"
-                            className="w-full p-3 border border-green-300 rounded-lg bg-white outline-none focus:border-green-600 font-bold text-green-900"
-                            value={formData.rebagResultTmNumber}
-                            onChange={e=>setFormData({...formData,rebagResultTmNumber:e.target.value})}
-                            placeholder="Masukkan TM hasil produksi"
-                            required
-                          />
-                          <div className="mt-2 space-y-1 text-xs text-green-700">
-                            <p>TM Hasil boleh digunakan kembali selama tetap terikat pada MO Utama yang sama.</p>
-                            <p className="font-bold">Batch otomatis: {formData.rebagTargetSkuId || 'SKU'}-{getProductionDateCode(formData.useBackdate && formData.backdateDateTime ? new Date(formData.backdateDateTime) : new Date()) || 'YYMMDD'}-NN</p>
+                        <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-4">
+                          <div className="flex items-start gap-3">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-700">
+                              <ClipboardList size={18}/>
+                            </div>
+                            <div>
+                              <div className="text-sm font-black text-violet-900">TM Hasil diisi pada QC Produk Jadi</div>
+                              <p className="mt-1 text-xs leading-5 text-violet-700">
+                                Operator tidak perlu mengisi TM Hasil. Setelah produksi tersimpan, QC/Admin mengisi TM Hasil sebagai data administrasi sebelum status RELEASE.
+                              </p>
+                              <p className="mt-2 text-xs font-black text-violet-800">
+                                Batch otomatis: {formData.rebagTargetSkuId || 'SKU'}-{getProductionDateCode(formData.useBackdate && formData.backdateDateTime ? new Date(formData.backdateDateTime) : new Date()) || 'YYMMDD'}-NN
+                              </p>
+                            </div>
                           </div>
                         </div>
 
@@ -6175,40 +7632,54 @@ Masukkan alasan override Super Admin:`
                               />
                             </div>
                             <div>
-                              <label className="block text-xs font-bold text-slate-600 mb-1.5">Status Mutu</label>
+                              <label className="block text-xs font-bold text-slate-600 mb-1.5">Penyimpangan Proses</label>
                               <select
                                 className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 font-bold"
                                 value={formData.rebagQualityStatus}
-                                onChange={e=>setFormData({...formData,rebagQualityStatus:e.target.value})}
+                                onChange={e=>setFormData({
+                                  ...formData,
+                                  rebagQualityStatus:e.target.value,
+                                  ...(e.target.value === "TIDAK_ADA_PENYIMPANGAN"
+                                    ? { rebagDeviation:"", rebagCorrectiveAction:"" }
+                                    : {})
+                                })}
                               >
-                                <option value="MENUNGGU">MENUNGGU VERIFIKASI</option>
-                                <option value="SESUAI">SESUAI</option>
-                                <option value="TIDAK SESUAI">TIDAK SESUAI</option>
+                                <option value="TIDAK_ADA_PENYIMPANGAN">TIDAK ADA PENYIMPANGAN</option>
+                                <option value="ADA_PENYIMPANGAN">ADA PENYIMPANGAN</option>
                               </select>
+                              <p className="mt-1.5 text-[10px] leading-4 text-slate-500">
+                                Operator hanya mencatat kejadian selama proses. Keputusan mutu akhir tetap dilakukan pada QC Produk Jadi.
+                              </p>
                             </div>
                           </div>
 
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Penyimpangan / Ketidaksesuaian</label>
-                            <textarea
-                              rows="2"
-                              className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 resize-y"
-                              value={formData.rebagDeviation}
-                              onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}
-                              placeholder="Kosongkan bila tidak ada penyimpangan."
-                            />
-                          </div>
+                          {formData.rebagQualityStatus === "ADA_PENYIMPANGAN" && (
+                            <>
+                              <div>
+                                <label className="block text-xs font-bold text-red-600 mb-1.5">Kejadian / Penyimpangan Proses</label>
+                                <textarea
+                                  rows="2"
+                                  className="w-full rounded-lg border border-red-200 bg-red-50/40 p-3 outline-none focus:border-red-500 resize-y"
+                                  value={formData.rebagDeviation}
+                                  onChange={e=>setFormData({...formData,rebagDeviation:e.target.value})}
+                                  placeholder="Jelaskan kejadian/penyimpangan yang terjadi saat proses."
+                                  required
+                                />
+                              </div>
 
-                          <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Tindakan Koreksi / Disposisi</label>
-                            <textarea
-                              rows="2"
-                              className="w-full rounded-lg border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 resize-y"
-                              value={formData.rebagCorrectiveAction}
-                              onChange={e=>setFormData({...formData,rebagCorrectiveAction:e.target.value})}
-                              placeholder="Wajib diisi bila Status Mutu = TIDAK SESUAI."
-                            />
-                          </div>
+                              <div>
+                                <label className="block text-xs font-bold text-amber-700 mb-1.5">Tindakan yang Dilakukan</label>
+                                <textarea
+                                  rows="2"
+                                  className="w-full rounded-lg border border-amber-200 bg-amber-50/40 p-3 outline-none focus:border-amber-500 resize-y"
+                                  value={formData.rebagCorrectiveAction}
+                                  onChange={e=>setFormData({...formData,rebagCorrectiveAction:e.target.value})}
+                                  placeholder="Jelaskan tindakan langsung yang dilakukan operator."
+                                  required
+                                />
+                              </div>
+                            </>
+                          )}
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -6216,16 +7687,113 @@ Masukkan alasan override Super Admin:`
                             <label className="block text-sm font-bold text-slate-700 mb-2">Tanggal Kadaluwarsa</label>
                             <input type="date" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500" value={formData.rebagExpiryDate} onChange={e=>setFormData({...formData,rebagExpiryDate:e.target.value})} required/>
                           </div>
-                          <div>
-                            <label className="block text-sm font-bold text-slate-700 mb-2">Tumpukan Tujuan</label>
-                            <select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white" value={formData.rebagTargetStack} onChange={e=>setFormData({...formData,rebagTargetStack:e.target.value})} required>
-                              <option value="">-- Pilih Lokasi Tumpukan --</option>
-                              {STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}
-                            </select>
-                          </div>
+                          {formData.rebagFinishedLocationId && (
+                            <div>
+                              <label className="block text-sm font-bold text-slate-700 mb-2">No./Kode Tumpukan Produk Jadi <span className="font-normal text-slate-400">(Opsional)</span></label>
+                              <input
+                                type="text"
+                                className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-red-500 bg-white"
+                                value={formData.rebagTargetStack}
+                                onChange={e=>setFormData({...formData,rebagTargetStack:e.target.value})}
+                                placeholder="Contoh: Tumpukan A01 / Blok 3"
+                              />
+                              <p className="mt-1.5 text-[10px] leading-4 text-slate-500">
+                                Posisi spesifik di dalam Lokasi Produk Jadi yang sudah dipilih. Kosongkan bila lokasi tersebut tidak memakai kode tumpukan.
+                              </p>
+                            </div>
+                          )}
                         </div>
                       </>
                     )}
+                    {activeOpTab === 'internal_move' && (
+                      <div className="space-y-5">
+                        <div className="rounded-2xl border border-cyan-200 bg-cyan-50/60 p-4">
+                          <div className="flex items-start gap-3">
+                            <ArrowRightLeft size={20} className="mt-0.5 shrink-0 text-cyan-700"/>
+                            <div>
+                              <h3 className="font-black text-cyan-900">Mutasi Internal Lokasi Fisik</h3>
+                              <p className="mt-1 text-xs leading-5 text-cyan-700">
+                                Memindahkan posisi fisik stok tanpa mengubah MO, TM, atau identitas asal. Untuk Beras/Gula Gudang Administrasi tetap; khusus kemasan/kardus Gudang Administrasi mengikuti lokasi fisik tujuan. Mutasi parsial otomatis membentuk batch lokasi turunan.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Batch Sumber</label>
+                          <select
+                            className="w-full p-3 border border-slate-300 rounded-lg bg-white outline-none focus:border-cyan-600"
+                            value={internalMoveForm.batchId}
+                            onChange={e=>setInternalMoveForm(prev=>({...prev,batchId:e.target.value,qty:""}))}
+                            required
+                          >
+                            <option value="">-- Pilih Batch Stok Aktif --</option>
+                            {sortBatchesFefoFifo(inventoryBatches.filter(batch=>Number(batch.currentQty||0)>0)).map(batch=>{
+                              const sku=skus.find(item=>item.id===batch.skuId);
+                              return (
+                                <option key={batch.batchId} value={batch.batchId}>
+                                  {batch.batchId} · {sku?.name||batch.skuId} · {getBatchPhysicalLocation(batch,systemConfig)} · Stok {batch.currentQty} {sku?.unit||''}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+
+                        {internalMoveForm.batchId && (()=>{
+                          const batch=inventoryBatches.find(item=>item.batchId===internalMoveForm.batchId);
+                          const sku=skus.find(item=>item.id===batch?.skuId);
+                          return batch ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs">
+                              <div><span className="font-black text-slate-400">Gudang Administrasi</span><div className="mt-1 font-bold text-slate-800">{batch.administrativeWarehouse||(batch.administrativeWarehouses||[]).join(', ')||getBatchAdministrativeWarehouse(batch,sku,systemConfig)||'-'}</div></div>
+                              <div><span className="font-black text-slate-400">Lokasi Fisik Saat Ini</span><div className="mt-1 font-black text-cyan-700">{getBatchPhysicalLocation(batch,systemConfig)||'-'}</div></div>
+                              <div><span className="font-black text-slate-400">MO / TM</span><div className="mt-1 font-bold text-slate-800">{batch.mainMoNumber||batch.moNumber||'-'} / {batch.resultTmNumber||batch.tmNumber||'-'}</div></div>
+                            </div>
+                          ) : null;
+                        })()}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Qty Dipindahkan</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max={inventoryBatches.find(batch=>batch.batchId===internalMoveForm.batchId)?.currentQty||undefined}
+                              className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-cyan-600"
+                              value={internalMoveForm.qty}
+                              onChange={e=>setInternalMoveForm(prev=>({...prev,qty:e.target.value}))}
+                              placeholder="0"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-bold text-cyan-700 mb-2">Lokasi Fisik Tujuan</label>
+                            <select
+                              className="w-full p-3 border border-cyan-300 bg-cyan-50/40 rounded-lg outline-none focus:border-cyan-600 font-bold"
+                              value={internalMoveForm.destinationLocationId}
+                              onChange={e=>setInternalMoveForm(prev=>({...prev,destinationLocationId:e.target.value}))}
+                              required
+                            >
+                              <option value="">-- Pilih Lokasi Tujuan --</option>
+                              {locations.filter(location=>locationSupportsStorage(location)).map(location=>(
+                                <option key={location.id} value={location.id}>{location.code||location.id} · {getLocationDisplayName(location)}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Alasan Mutasi</label>
+                          <input
+                            className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-cyan-600"
+                            value={internalMoveForm.reason}
+                            onChange={e=>setInternalMoveForm(prev=>({...prev,reason:e.target.value}))}
+                            placeholder="Contoh: Dipindahkan ke UP 17 untuk proses Rebagging Gula"
+                            required
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     {activeOpTab === 'outbound' && (
                       <>
                         <div>
@@ -6294,7 +7862,7 @@ Masukkan alasan override Super Admin:`
                                 >
                                   <div>
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <p className="font-bold text-slate-800 text-sm">{b.targetStack||b.sourceWarehouse||'-'}</p>
+                                      <p className="font-bold text-slate-800 text-sm">{getBatchPhysicalLocation(b,systemConfig)||'-'}{b.targetStack?` · ${b.targetStack}`:""}</p>
                                       <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${expiryInfo.isExpired?'bg-red-100 text-red-700':isRecommended?'bg-green-100 text-green-700':expiryInfo.daysRemaining!==null && expiryInfo.daysRemaining<=30?'bg-orange-100 text-orange-700':expiryInfo.daysRemaining!==null && expiryInfo.daysRemaining<=90?'bg-amber-100 text-amber-700':'bg-slate-100 text-slate-600'}`}>
                                         {recommendation}
                                       </span>
@@ -6306,6 +7874,7 @@ Masukkan alasan override Super Admin:`
                                         <p className="text-xs text-violet-700 font-bold mt-1">MO Utama: {b.mainMoNumber||getPrimaryMoNumber(b)||'-'}</p>
                                         <p className="text-xs text-slate-500 mt-1">MO Sumber: {(b.sourceMoNumbers||[]).join(', ') || b.moNumber || '-'}</p>
                                         <p className="text-xs text-slate-500 mt-1">TM Bahan: {(b.sourceTmNumbers||[]).join(', ') || '-'}</p>
+                                        <p className="text-xs font-bold text-cyan-700 mt-1">Gudang Administrasi: {b.administrativeWarehouse||(b.administrativeWarehouses||[]).join(', ')||'-'}</p>
                                       </>
                                     ) : (
                                       <p className="text-xs text-slate-500 mt-1">MO: {b.moNumber||'-'} · TM: {b.tmNumber||'-'}</p>
@@ -6644,28 +8213,174 @@ Masukkan alasan override Super Admin:`
 
 
           {/* QUALITY CONTROL */}
-          {activeMenu === "qc" && hasAccess(["Super Admin", "Admin", "QC"]) && (
+          {activeMenu === "qc" && canPerform("qc") && (
             <div className="space-y-6">
-              <div><h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Quality Control</h1><p className="mt-2 text-sm text-slate-500">QC Bahan Masuk mengendalikan bahan yang boleh dipakai Rebagging. QC Produk Jadi mengendalikan batch yang boleh Outbound.</p></div>
+              <div><h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Quality Control</h1><p className="mt-2 text-sm text-slate-500">QC Bahan Masuk dilakukan per MO dan dapat mencakup beberapa TM bahan sekaligus. QC Produk Jadi tetap dilakukan per batch produksi sebelum Outbound.</p></div>
               <div className="inline-flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
                 <button type="button" onClick={()=>handleQcTabChange("incoming")} className={"flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all " + (activeQcTab==="incoming"?"bg-blue-600 text-white shadow-lg":"text-slate-500 hover:bg-white")}><PackagePlus size={17}/> QC Bahan Masuk</button>
                 <button type="button" onClick={()=>handleQcTabChange("finished")} className={"flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all " + (activeQcTab==="finished"?"bg-emerald-600 text-white shadow-lg":"text-slate-500 hover:bg-white")}><CheckCircle size={17}/> QC Produk Jadi</button>
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <form onSubmit={handleQcSubmit} className="xl:col-span-2 rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-sm space-y-5">
-                  <div><div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">{activeQcTab==="incoming" ? "Incoming Quality Control" : "Finished Goods Quality Control"}</div><h2 className="mt-1 text-xl font-black text-slate-900">{activeQcTab==="incoming" ? "Pemeriksaan Bahan Masuk" : "Pemeriksaan Produk Jadi"}</h2></div>
-                  <div><label className="mb-2 block text-sm font-bold text-slate-700">Pilih Batch</label><select className="w-full rounded-xl border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 font-medium" value={qcForm.batchId} onChange={e=>setQcForm({...qcForm,batchId:e.target.value})} required><option value="">-- Pilih Batch untuk QC --</option>{inventoryBatches.filter(batch=>{const sku=skus.find(item=>item.id===batch.skuId);const pendingStatuses=["PENDING_QC","HOLD","REJECTED"];return Number(batch.currentQty||0)>0 && pendingStatuses.includes(batch.qcStatus) && (activeQcTab==="incoming" ? sku?.type==="bulk" : sku?.type==="rebagged");}).sort((a,b)=>new Date(b.productionDate||b.date||0)-new Date(a.productionDate||a.date||0)).map(batch=>{const sku=skus.find(item=>item.id===batch.skuId);return <option key={batch.batchId} value={batch.batchId}>[{getQcStatusLabel(batch)}] {batch.batchId} · {sku?.name||batch.skuId} · Stok {batch.currentQty}</option>;})}</select></div>
-                  {qcForm.batchId && (()=>{const selected=inventoryBatches.find(batch=>batch.batchId===qcForm.batchId);const sku=skus.find(item=>item.id===selected?.skuId);return selected?(<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs"><div><span className="font-black text-slate-400">SKU / Produk</span><div className="mt-1 font-bold text-slate-800">{selected.skuId} · {sku?.name||"-"}</div></div><div><span className="font-black text-slate-400">Status QC</span><div className="mt-1 font-black text-blue-700">{getQcStatusLabel(selected)}</div></div><div><span className="font-black text-slate-400">{activeQcTab==="incoming"?"MO / TM Bahan":"MO Utama / TM Hasil"}</span><div className="mt-1 font-bold text-slate-800">{activeQcTab==="incoming"?((selected.moNumber||"-")+" / "+(selected.tmNumber||"-")):((selected.mainMoNumber||getPrimaryMoNumber(selected)||"-")+" / "+(selected.resultTmNumber||"-"))}</div></div><div><span className="font-black text-slate-400">Gudang / Tumpukan</span><div className="mt-1 font-bold text-slate-800">{selected.sourceWarehouse||selected.targetStack||"-"}</div></div><div><span className="font-black text-slate-400">Expiry</span><div className="mt-1 font-bold text-slate-800">{formatPdfDate(selected.expiryDate)||"-"}</div></div><div><span className="font-black text-slate-400">Stok Saat Ini</span><div className="mt-1 font-bold text-slate-800">{Number(selected.currentQty||0).toLocaleString("id-ID")} {sku?.unit||""}</div></div></div>):null;})()}
+                  <div><div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">{activeQcTab==="incoming" ? "Incoming Quality Control" : "Finished Goods Quality Control"}</div><h2 className="mt-1 text-xl font-black text-slate-900">{activeQcTab==="incoming" ? "Pemeriksaan Bahan Masuk per MO" : "Pemeriksaan Produk Jadi per Batch"}</h2></div>
+                  {activeQcTab === "incoming" ? (
+                    <>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-slate-700">Pilih MO Bahan</label>
+                        <select
+                          className="w-full rounded-xl border border-slate-300 bg-white p-3 outline-none focus:border-blue-500 font-medium"
+                          value={qcForm.moNumber || ""}
+                          onChange={e=>setQcForm({...qcForm,moNumber:e.target.value,batchId:""})}
+                          required
+                        >
+                          <option value="">-- Pilih MO untuk QC --</option>
+                          {incomingQcMoGroups.map(group=>(
+                            <option key={group.moNumber} value={group.moNumber}>
+                              MO {group.moNumber} · {group.tmNumbers.length} TM · {group.items.length} item/batch
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1.5 text-xs text-slate-500">
+                          Satu keputusan QC berlaku untuk seluruh batch bahan unresolved di bawah MO yang dipilih.
+                        </p>
+                      </div>
+
+                      {qcForm.moNumber && (()=>{
+                        const group=incomingQcMoGroups.find(item=>item.moNumber===qcForm.moNumber);
+                        if(!group) return null;
+                        return (
+                          <div className="rounded-2xl border border-blue-200 bg-blue-50/30 p-4 space-y-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div>
+                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-blue-500">Cakupan QC Incoming</div>
+                                <div className="mt-1 text-lg font-black text-slate-900">MO {group.moNumber}</div>
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-[10px] font-black">
+                                <span className="rounded-full bg-violet-100 px-3 py-1.5 text-violet-700">{group.tmNumbers.length} TM BAHAN</span>
+                                <span className="rounded-full bg-blue-100 px-3 py-1.5 text-blue-700">{group.items.length} ITEM/BATCH</span>
+                              </div>
+                            </div>
+                            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                              <table className="w-full min-w-[900px] text-xs">
+                                <thead className="bg-slate-50 text-slate-500">
+                                  <tr>
+                                    <th className="p-2.5 text-left">TM Bahan</th>
+                                    <th className="p-2.5 text-left">SKU / Bahan</th>
+                                    <th className="p-2.5 text-left">Batch</th>
+                                    <th className="p-2.5 text-right">Qty</th>
+                                    <th className="p-2.5 text-left">Gudang Administrasi</th>
+                                    <th className="p-2.5 text-left">Lokasi Fisik</th>
+                                    <th className="p-2.5 text-center">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {group.items.map(item=>(
+                                    <tr key={item.batchId}>
+                                      <td className="p-2.5 font-mono font-black text-violet-700">{item.tmNumber||"-"}</td>
+                                      <td className="p-2.5"><div className="font-mono text-[10px] font-black text-blue-600">{item.skuId}</div><div className="mt-0.5 font-bold text-slate-800">{item.skuName}</div></td>
+                                      <td className="p-2.5 font-mono text-[10px] text-slate-500">{item.batchId}</td>
+                                      <td className="p-2.5 text-right font-black text-slate-800">{item.qtySnapshot.toLocaleString("id-ID")} {item.unit}</td>
+                                      <td className="p-2.5 font-bold text-slate-600">{item.administrativeWarehouse||"-"}</td>
+                                      <td className="p-2.5 font-bold text-cyan-700">{item.physicalLocation||"-"}</td>
+                                      <td className="p-2.5 text-center"><span className="rounded-full bg-amber-50 px-2 py-1 text-[9px] font-black text-amber-700">{item.qcStatus}</span></td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="text-xs text-slate-600">
+                              TM: <span className="font-mono font-black text-violet-700">{group.tmNumbers.join(", ") || "-"}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-slate-700">Pilih Batch Produk Jadi</label>
+                        <select
+                          className="w-full rounded-xl border border-slate-300 bg-white p-3 outline-none focus:border-emerald-500 font-medium"
+                          value={qcForm.batchId}
+                          onChange={e=>{
+                            const selected=inventoryBatches.find(batch=>batch.batchId===e.target.value);
+                            setQcForm({...qcForm,batchId:e.target.value,resultTmNumber:selected?.resultTmNumber||""});
+                          }}
+                          required
+                        >
+                          <option value="">-- Pilih Batch Produk Jadi untuk QC --</option>
+                          {inventoryBatches
+                            .filter(batch=>{
+                              const sku=skus.find(item=>item.id===batch.skuId);
+                              const pendingStatuses=["PENDING_QC","HOLD","REJECTED"];
+                              return Number(batch.currentQty||0)>0 && pendingStatuses.includes(batch.qcStatus) && sku?.type==="rebagged";
+                            })
+                            .sort((a,b)=>new Date(b.productionDate||b.date||0)-new Date(a.productionDate||a.date||0))
+                            .map(batch=>{
+                              const sku=skus.find(item=>item.id===batch.skuId);
+                              return <option key={batch.batchId} value={batch.batchId}>[{getQcStatusLabel(batch)}] {batch.batchId} · {sku?.name||batch.skuId} · Stok {batch.currentQty}</option>;
+                            })}
+                        </select>
+                      </div>
+                      {qcForm.batchId && (()=>{
+                        const selected=inventoryBatches.find(batch=>batch.batchId===qcForm.batchId);
+                        const sku=skus.find(item=>item.id===selected?.skuId);
+                        return selected?(<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs"><div><span className="font-black text-slate-400">SKU / Produk</span><div className="mt-1 font-bold text-slate-800">{selected.skuId} · {sku?.name||"-"}</div></div><div><span className="font-black text-slate-400">Status QC</span><div className="mt-1 font-black text-emerald-700">{getQcStatusLabel(selected)}</div></div><div><span className="font-black text-slate-400">MO Utama / TM Hasil</span><div className="mt-1 font-bold text-slate-800">{(selected.mainMoNumber||getPrimaryMoNumber(selected)||"-")+" / "+(qcForm.resultTmNumber||selected.resultTmNumber||"MENUNGGU QC/ADMIN")}</div></div><div><span className="font-black text-slate-400">Gudang Administrasi</span><div className="mt-1 font-bold text-slate-800">{selected.administrativeWarehouse||(Array.isArray(selected.administrativeWarehouses)?selected.administrativeWarehouses.join(", "):"")||getBatchAdministrativeWarehouse(selected,sku,systemConfig)||"-"}</div></div><div><span className="font-black text-slate-400">Lokasi Fisik / Tumpukan</span><div className="mt-1 font-bold text-slate-800">{getBatchPhysicalLocation(selected,systemConfig)||"-"}{selected.targetStack?` · ${selected.targetStack}`:""}</div></div><div><span className="font-black text-slate-400">Expiry</span><div className="mt-1 font-bold text-slate-800">{formatPdfDate(selected.expiryDate)||"-"}</div></div><div><span className="font-black text-slate-400">Stok Saat Ini</span><div className="mt-1 font-bold text-slate-800">{Number(selected.currentQty||0).toLocaleString("id-ID")} {sku?.unit||""}</div></div></div>):null;
+                      })()}
+                    </>
+                  )}
                   <div><h3 className="mb-3 font-black text-slate-800">Parameter Pemeriksaan</h3><div className="space-y-2">{(activeQcTab==="incoming"?QC_INCOMING_CHECKS:QC_FINISHED_CHECKS).map(([key,label],index)=>(<label key={key} className={"flex items-center justify-between gap-4 rounded-xl border p-3 cursor-pointer "+(qcForm.checks[key]?"border-emerald-200 bg-emerald-50/50":"border-red-200 bg-red-50/60")}><div className="flex items-center gap-3"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-xs font-black text-slate-500 shadow-sm">{index+1}</span><span className="text-sm font-bold text-slate-700">{label}</span></div><div className="flex items-center gap-2"><span className={"text-[10px] font-black "+(qcForm.checks[key]?"text-emerald-700":"text-red-700")}>{qcForm.checks[key]?"SESUAI":"TIDAK SESUAI"}</span><input type="checkbox" checked={Boolean(qcForm.checks[key])} onChange={e=>handleQcCheckChange(key,e.target.checked)} className="h-5 w-5 accent-emerald-600"/></div></label>))}</div></div>
+                  {activeQcTab==="finished" && (
+                    <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-4">
+                      <label className="mb-2 block text-sm font-black text-violet-900">TM Hasil (Data Administrasi)</label>
+                      <input
+                        type="text"
+                        className="w-full rounded-xl border border-violet-300 bg-white p-3 font-black text-violet-900 outline-none focus:border-violet-600"
+                        value={qcForm.resultTmNumber||""}
+                        onChange={e=>setQcForm({...qcForm,resultTmNumber:e.target.value})}
+                        placeholder="Masukkan TM Hasil dari data administrasi"
+                        required={qcForm.decision==="RELEASE"}
+                      />
+                      <p className="mt-2 text-xs leading-5 text-violet-700">
+                        Wajib sebelum RELEASE. TM Hasil boleh digunakan kembali untuk batch produksi lain selama tetap terikat pada MO Utama yang sama.
+                      </p>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><div><label className="mb-1.5 block text-xs font-bold text-slate-600">No. COA / Hasil Uji (Opsional)</label><input className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-blue-500" value={qcForm.coaNumber} onChange={e=>setQcForm({...qcForm,coaNumber:e.target.value})} placeholder="Nomor COA / hasil uji"/></div><div><label className="mb-1.5 block text-xs font-bold text-slate-600">Keputusan QC</label><select className="w-full rounded-xl border border-slate-300 bg-white p-3 font-black outline-none focus:border-blue-500" value={qcForm.decision} onChange={e=>setQcForm({...qcForm,decision:e.target.value})}>{activeQcTab==="incoming"?<><option value="ACCEPT">ACCEPT</option><option value="HOLD">HOLD</option><option value="REJECT">REJECT</option></>:<><option value="RELEASE">RELEASE</option><option value="HOLD">HOLD</option><option value="REJECT">REJECT</option></>}</select></div></div>
                   <div><label className="mb-1.5 block text-xs font-bold text-slate-600">Catatan Pemeriksaan</label><textarea rows="2" className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-blue-500 resize-y" value={qcForm.inspectionNote} onChange={e=>setQcForm({...qcForm,inspectionNote:e.target.value})} placeholder="Catatan umum pemeriksaan QC"/></div>
                   <div><label className="mb-1.5 block text-xs font-bold text-red-600">Penyimpangan / Ketidaksesuaian</label><textarea rows="2" className="w-full rounded-xl border border-red-200 bg-red-50/40 p-3 outline-none focus:border-red-500 resize-y" value={qcForm.nonconformity} onChange={e=>setQcForm({...qcForm,nonconformity:e.target.value})} placeholder="Wajib untuk HOLD/REJECT"/></div>
                   <div><label className="mb-1.5 block text-xs font-bold text-amber-700">Tindakan Koreksi / Disposisi</label><textarea rows="2" className="w-full rounded-xl border border-amber-200 bg-amber-50/40 p-3 outline-none focus:border-amber-500 resize-y" value={qcForm.correctiveAction} onChange={e=>setQcForm({...qcForm,correctiveAction:e.target.value})} placeholder="Wajib untuk REJECT"/></div>
-                  <button type="submit" disabled={qcSaving} className={"w-full rounded-xl py-3.5 font-black text-white shadow-lg transition-colors disabled:bg-slate-300 "+(activeQcTab==="incoming"?"bg-blue-600 hover:bg-blue-700":"bg-emerald-600 hover:bg-emerald-700")}>{qcSaving?"Menyimpan QC...":activeQcTab==="incoming"?"Simpan QC Bahan Masuk":"Simpan QC Produk Jadi"}</button>
+                  <button type="submit" disabled={qcSaving} className={"w-full rounded-xl py-3.5 font-black text-white shadow-lg transition-colors disabled:bg-slate-300 "+(activeQcTab==="incoming"?"bg-blue-600 hover:bg-blue-700":"bg-emerald-600 hover:bg-emerald-700")}>{qcSaving?"Menyimpan QC...":activeQcTab==="incoming"?"Simpan QC 1 MO":"Simpan QC Produk Jadi"}</button>
                 </form>
-                <div className="space-y-4"><div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Pending QC</div><div className="mt-3 grid grid-cols-2 gap-3"><div className="rounded-xl bg-blue-50 p-3"><div className="text-[10px] font-black text-blue-500">BAHAN</div><div className="mt-1 text-2xl font-black text-blue-800">{inventoryBatches.filter(batch=>{const sku=skus.find(item=>item.id===batch.skuId);return sku?.type==="bulk"&&batch.qcStatus==="PENDING_QC";}).length}</div></div><div className="rounded-xl bg-emerald-50 p-3"><div className="text-[10px] font-black text-emerald-500">PRODUK JADI</div><div className="mt-1 text-2xl font-black text-emerald-800">{inventoryBatches.filter(batch=>{const sku=skus.find(item=>item.id===batch.skuId);return sku?.type==="rebagged"&&batch.qcStatus==="PENDING_QC";}).length}</div></div></div></div><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-800"><strong>Batch lama tanpa qcStatus</strong> diperlakukan sebagai LEGACY agar transaksi lama tidak terblokir. Batch baru wajib melalui QC.</div></div>
+                <div className="space-y-4"><div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Pending QC</div><div className="mt-3 grid grid-cols-2 gap-3"><div className="rounded-xl bg-blue-50 p-3"><div className="text-[10px] font-black text-blue-500">MO BAHAN</div><div className="mt-1 text-2xl font-black text-blue-800">{incomingQcMoGroups.filter(group=>group.items.some(item=>item.qcStatus==="PENDING_QC")).length}</div></div><div className="rounded-xl bg-emerald-50 p-3"><div className="text-[10px] font-black text-emerald-500">PRODUK JADI</div><div className="mt-1 text-2xl font-black text-emerald-800">{inventoryBatches.filter(batch=>{const sku=skus.find(item=>item.id===batch.skuId);return sku?.type==="rebagged"&&batch.qcStatus==="PENDING_QC";}).length}</div></div></div></div><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-800"><strong>Batch lama tanpa qcStatus</strong> diperlakukan sebagai LEGACY agar transaksi lama tidak terblokir. Batch baru wajib melalui QC.</div></div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden"><div className="border-b border-slate-200 p-4 sm:p-5"><h3 className="font-black text-slate-900">Riwayat QC</h3><p className="mt-1 text-xs text-slate-500">Setiap keputusan QC tersimpan dan dapat diunduh PDF.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Tanggal</th><th className="p-3 text-left">Jenis</th><th className="p-3 text-left">Batch / Produk</th><th className="p-3 text-left">MO / TM</th><th className="p-3 text-center">Keputusan</th><th className="p-3 text-left">Petugas</th><th className="p-3 text-center">Dokumen</th></tr></thead><tbody className="divide-y divide-slate-100">{paginatedQcRecords.map(record=>(<tr key={record.id} className="hover:bg-slate-50"><td className="p-3 whitespace-nowrap">{new Date(record.inspectedAt).toLocaleString("id-ID")}</td><td className="p-3 font-black text-xs">{record.qcType==="INCOMING"?"BAHAN MASUK":"PRODUK JADI"}</td><td className="p-3"><div className="font-mono text-xs font-black text-blue-700">{record.batchId}</div><div className="mt-1 text-xs text-slate-600">{record.skuName}</div></td><td className="p-3 text-xs">{record.qcType==="INCOMING"?((record.moNumber||"-")+" / "+(record.tmNumber||"-")):((record.mainMoNumber||"-")+" / "+(record.resultTmNumber||"-"))}</td><td className="p-3 text-center"><span className={"rounded-full px-3 py-1 text-[10px] font-black "+(["ACCEPT","RELEASE"].includes(record.decision)?"bg-emerald-100 text-emerald-700":record.decision==="HOLD"?"bg-amber-100 text-amber-700":"bg-red-100 text-red-700")}>{record.decision}</span></td><td className="p-3 text-xs">{record.inspectedBy}<div className="text-slate-400">{record.inspectedRole}</div></td><td className="p-3 text-center"><button type="button" onClick={()=>generateQcPdf(record)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 hover:bg-blue-100"><FileDown size={15}/> PDF QC</button></td></tr>))}</tbody></table>{qcRecords.length===0&&<div className="p-8 text-center text-sm italic text-slate-400">Belum ada rekaman QC.</div>}</div>
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden"><div className="border-b border-slate-200 p-4 sm:p-5"><h3 className="font-black text-slate-900">Riwayat QC</h3><p className="mt-1 text-xs text-slate-500">Setiap keputusan QC tersimpan dan dapat diunduh PDF.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Tanggal</th><th className="p-3 text-left">Jenis</th><th className="p-3 text-left">Batch / Produk</th><th className="p-3 text-left">MO / TM</th><th className="p-3 text-center">Keputusan</th><th className="p-3 text-left">Petugas</th><th className="p-3 text-center">Dokumen</th></tr></thead><tbody className="divide-y divide-slate-100">{paginatedQcRecords.map(record=>(
+                    <tr key={record.id} className="hover:bg-slate-50">
+                      <td className="p-3 whitespace-nowrap">{new Date(record.inspectedAt).toLocaleString("id-ID")}</td>
+                      <td className="p-3 font-black text-xs">{record.qcType==="INCOMING"?"BAHAN MASUK":"PRODUK JADI"}</td>
+                      <td className="p-3">
+                        {record.qcType==="INCOMING" && record.scope==="MO" ? (
+                          <>
+                            <div className="font-mono text-xs font-black text-blue-700">MO {record.moNumber||"-"}</div>
+                            <div className="mt-1 text-xs text-slate-600">{record.itemCount||record.batchIds?.length||0} item/batch · {record.tmNumbers?.length||0} TM</div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="font-mono text-xs font-black text-blue-700">{record.batchId}</div>
+                            <div className="mt-1 text-xs text-slate-600">{record.skuName}</div>
+                          </>
+                        )}
+                      </td>
+                      <td className="p-3 text-xs">
+                        {record.qcType==="INCOMING"
+                          ? ((record.moNumber||"-")+" / "+((record.tmNumbers||[]).join(", ")||record.tmNumber||"-"))
+                          : ((record.mainMoNumber||"-")+" / "+(record.resultTmNumber||"-"))}
+                      </td>
+                      <td className="p-3 text-center"><span className={"rounded-full px-3 py-1 text-[10px] font-black "+(["ACCEPT","RELEASE"].includes(record.decision)?"bg-emerald-100 text-emerald-700":record.decision==="HOLD"?"bg-amber-100 text-amber-700":"bg-red-100 text-red-700")}>{record.decision}</span></td>
+                      <td className="p-3 text-xs">{record.inspectedBy}<div className="text-slate-400">{record.inspectedRole}</div></td>
+                      <td className="p-3 text-center"><button type="button" onClick={()=>generateQcPdf(record)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 hover:bg-blue-100"><FileDown size={15}/> PDF QC</button></td>
+                    </tr>
+                  ))}</tbody></table>{qcRecords.length===0&&<div className="p-8 text-center text-sm italic text-slate-400">Belum ada rekaman QC.</div>}</div>
                 {qcRecords.length > 0 && (
                   <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="text-xs font-bold text-slate-500">
@@ -6738,13 +8453,18 @@ Masukkan alasan override Super Admin:`
                           )}
                         </td>
                         <td className="p-4 text-center">
-                          <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : t.type === 'MATERIAL_DAMAGE' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                          <span className={`px-4 py-1.5 rounded-full text-xs font-black tracking-widest whitespace-nowrap ${t.type === 'INBOUND' ? 'bg-blue-100 text-blue-700' : t.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-700' : t.type === 'INTERNAL_MOVE' ? 'bg-cyan-100 text-cyan-700' : t.type === 'MATERIAL_DAMAGE' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
                             {t.type}
                           </span>
                         </td>
                         <td className="p-4 font-bold text-slate-800 min-w-[200px]">{t.skuName} <br/><span className="text-xs font-normal text-slate-500">{t.skuId}</span></td>
                         <td className="p-4 text-center font-black whitespace-nowrap">
-                          {t.type === 'MATERIAL_DAMAGE' ? (
+                          {t.type === 'INTERNAL_MOVE' ? (
+                            <div>
+                              <div className="text-cyan-700">{t.qtyChange} {t.unit}</div>
+                              <div className="mt-1 text-[10px] font-bold text-cyan-600">{t.fromPhysicalLocation || '-'} → {t.toPhysicalLocation || '-'}</div>
+                            </div>
+                          ) : t.type === 'MATERIAL_DAMAGE' ? (
                             <div>
                               <div className="text-red-600">-{t.damageQty ?? t.qtyChange} {t.unit}</div>
                               <div className="mt-1 text-[10px] font-bold text-red-400">KERUSAKAN BAHAN</div>
@@ -6852,6 +8572,12 @@ Masukkan alasan override Super Admin:`
                     <Database size={17}/> Database SKU
                   </button>
                   <button
+                    onClick={()=>setActiveTabSettings('locations')}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='locations'?'bg-slate-900 text-white shadow-lg':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                  >
+                    <Home size={17}/> Master Lokasi
+                  </button>
+                  <button
                     onClick={()=>setActiveTabSettings('recipes')}
                     className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeTabSettings==='recipes'?'bg-slate-900 text-white shadow-lg':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
                   >
@@ -6874,6 +8600,41 @@ Masukkan alasan override Super Admin:`
                 </div>
               </div>
               
+              {activeTabSettings === 'locations' && (
+                <div className="space-y-5">
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                    <h3 className="font-black text-blue-900">Master Lokasi Fisik</h3>
+                    <p className="mt-1 text-xs leading-5 text-blue-700">
+                      Atur seluruh UP, RTR, GBB, dan Gudang Multi Purpose yang dapat menjadi lokasi penyimpanan maupun proses Rebagging. UP 17, UP 20, RTR 60, dan Multi Purpose disediakan sebagai data awal. Tambahkan 8 GBB sesuai nama/kode resmi gudang Anda.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+                    <form onSubmit={handleSaveLocation} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+                      <div><div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">{locationForm.id?'Edit Lokasi':'Lokasi Baru'}</div><h3 className="mt-1 font-black text-slate-900">Data Lokasi</h3></div>
+                      <div><label className="block text-xs font-bold text-slate-600 mb-1.5">Kode Lokasi</label><input className="w-full rounded-lg border border-slate-300 p-3 outline-none focus:border-blue-500" value={locationForm.code} onChange={e=>setLocationForm({...locationForm,code:e.target.value})} placeholder="Contoh: GBB-01" required disabled={Boolean(locationForm.id)}/></div>
+                      <div><label className="block text-xs font-bold text-slate-600 mb-1.5">Nama Lokasi</label><input className="w-full rounded-lg border border-slate-300 p-3 outline-none focus:border-blue-500" value={locationForm.name} onChange={e=>setLocationForm({...locationForm,name:e.target.value})} placeholder="Nama resmi gudang/lokasi" required/></div>
+                      <div><label className="block text-xs font-bold text-slate-600 mb-1.5">Tipe Lokasi</label><select className="w-full rounded-lg border border-slate-300 bg-white p-3" value={locationForm.type} onChange={e=>setLocationForm({...locationForm,type:e.target.value})}><option value="UP">UP</option><option value="GBB">GBB</option><option value="RTR">RTR</option><option value="MULTI_PURPOSE">Multi Purpose</option></select></div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 mb-2">Fungsi Lokasi</label>
+                        <div className="space-y-2">
+                          {[["STORAGE","Penyimpanan"],["REBAG_GULA","Rebag Gula"],["REBAG_BERAS","Rebag Beras"]].map(([id,label])=>(
+                            <label key={id} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2.5 cursor-pointer"><input type="checkbox" className="h-4 w-4" checked={(locationForm.functions||[]).includes(id)} onChange={()=>handleLocationFunctionToggle(id)}/><span className="text-xs font-bold text-slate-700">{label}</span></label>
+                          ))}
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-2"><input type="checkbox" checked={locationForm.active!==false} onChange={e=>setLocationForm({...locationForm,active:e.target.checked})}/><span className="text-xs font-bold text-slate-700">Lokasi Aktif</span></label>
+                      <div className="flex gap-2"><button type="submit" className="flex-1 rounded-lg bg-slate-900 px-4 py-3 text-xs font-black text-white hover:bg-slate-800">{locationForm.id?'Simpan Perubahan':'Tambah Lokasi'}</button>{locationForm.id&&<button type="button" onClick={resetLocationForm} className="rounded-lg border border-slate-200 px-4 py-3 text-xs font-black text-slate-600">Batal</button>}</div>
+                    </form>
+
+                    <div className="xl:col-span-2 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                      <div className="border-b border-slate-200 p-4"><h3 className="font-black text-slate-900">Daftar Lokasi</h3><p className="mt-1 text-xs text-slate-500">Lokasi nonaktif tidak muncul pada transaksi baru, tetapi riwayat lama tetap tersimpan.</p></div>
+                      <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3 text-left">Kode / Nama</th><th className="p-3 text-left">Tipe</th><th className="p-3 text-left">Fungsi</th><th className="p-3 text-center">Status</th><th className="p-3 text-center">Aksi</th></tr></thead><tbody className="divide-y divide-slate-100">{locations.map(location=>(<tr key={location.id}><td className="p-3"><div className="font-mono text-xs font-black text-blue-700">{location.code||location.id}</div><div className="mt-1 font-bold text-slate-900">{getLocationDisplayName(location)}</div></td><td className="p-3 font-bold text-slate-600">{location.type}</td><td className="p-3"><div className="flex flex-wrap gap-1">{(location.functions||[]).map(fn=><span key={fn} className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black text-slate-600">{fn}</span>)}</div></td><td className="p-3 text-center"><span className={`rounded-full px-2 py-1 text-[10px] font-black ${location.active!==false?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-500'}`}>{location.active!==false?'AKTIF':'NONAKTIF'}</span></td><td className="p-3 text-center"><div className="inline-flex gap-1"><button type="button" onClick={()=>handleEditLocation(location)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-black text-blue-700">Edit</button><button type="button" onClick={()=>handleDeleteLocation(location)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[10px] font-black text-red-700">Hapus</button></div></td></tr>))}</tbody></table></div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {activeTabSettings === 'system' && (
                 <form onSubmit={handleUpdateConfig} className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200 max-w-2xl space-y-6">
                   <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
