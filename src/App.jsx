@@ -6295,8 +6295,7 @@ Masukkan alasan override Super Admin:`
                     Dashboard Persediaan
                   </h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                    Ringkasan stok aktif, status produk jadi, QC, dan risiko kedaluwarsa.
-                    Kuantitas ditampilkan per satuan agar KG, Pack, PCS, dan Karton tidak tercampur.
+                    Ringkasan stok dan persediaan aktif gudang.
                   </p>
                 </div>
                 <div className="inline-flex items-center gap-2 self-start rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 shadow-sm">
@@ -6313,9 +6312,6 @@ Masukkan alasan override Super Admin:`
                         Total Persediaan Aktif
                       </div>
                       <h2 className="mt-2 text-2xl font-black">Stok Gudang Saat Ini</h2>
-                      <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">
-                        Bahan baku dan produk jadi dipisahkan berdasarkan satuan dan status agar saldo lebih mudah dibaca.
-                      </p>
                     </div>
                     <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-right">
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">SKU aktif</div>
@@ -7849,7 +7845,7 @@ Masukkan alasan override Super Admin:`
           {/* QUALITY CONTROL */}
           {activeMenu === "qc" && hasAccess(["Super Admin", "Admin", "QC"]) && (
             <div className="space-y-6">
-              <div><h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Quality Control</h1><p className="mt-2 text-sm text-slate-500">QC Bahan Masuk mengendalikan bahan yang boleh dipakai Rebagging. QC Produk Jadi mengendalikan batch yang boleh Outbound.</p></div>
+              <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Quality Control</h1>
               <div className="inline-flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
                 <button type="button" onClick={()=>handleQcTabChange("incoming")} className={"flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all " + (activeQcTab==="incoming"?"bg-blue-600 text-white shadow-lg":"text-slate-500 hover:bg-white")}><PackagePlus size={17}/> QC Bahan Masuk</button>
                 <button type="button" onClick={()=>handleQcTabChange("finished")} className={"flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all " + (activeQcTab==="finished"?"bg-emerald-600 text-white shadow-lg":"text-slate-500 hover:bg-white")}><CheckCircle size={17}/> QC Produk Jadi</button>
