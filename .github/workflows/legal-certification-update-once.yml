@@ -1,0 +1,67 @@
+name: One-time legal certification update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/legal-certification-update-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  update-legal-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update certification references and settings
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/App.jsx")
+          text = path.read_text(encoding="utf-8")
+
+          # 1. Add legal/certification defaults from the official documents.
+          config_marker = '  rebagApproverName: "IRSA MAULIAN NUGRAHA",\n'
+          legal_defaults = '''  rebagApproverName: "IRSA MAULIAN NUGRAHA",\n  cppobBusinessLicenseNumber: "912030791310401280004",\n  cppobPermitNumber: "PW-S.04.09.1.53.53207.26-2270.P",\n  cppobIssuedDate: "2026-07-30",\n  cppobValidUntil: "2031-07-22",\n  cppobScope: "Gula dan Pemanis",\n  sniCertificateNumber: "PSN-SNI04-8-26-33",\n  sniStandard: "SNI 3140.3:2020",\n  sniProduct: "Gula Kristal - Bagian 3: Putih",\n  sniBrand: "Maniskita",\n  sniIssuedDate: "2026-07-30",\n  sniValidUntil: "2030-07-29",\n'''
+          if text.count(config_marker) != 1:
+              raise SystemExit(f"Expected 1 config marker, found {text.count(config_marker)}")
+          text = text.replace(config_marker, legal_defaults, 1)
+
+          # 2. Correct the sugar SNI reference everywhere it is shown/printed.
+          old_sni = "SNI 3140.3:2010/Amd1:2011"
+          old_count = text.count(old_sni)
+          if old_count < 2:
+              raise SystemExit(f"Expected at least 2 old SNI references, found {old_count}")
+          text = text.replace(old_sni, "SNI 3140.3:2020")
+
+          # 3. Add a dedicated Legalitas & Sertifikasi section before Save.
+          save_button = '                  <button className="w-full sm:w-auto bg-slate-800 text-white font-bold px-6 py-3 rounded-lg hover:bg-slate-900 shadow-md">Simpan Perubahan Sistem</button>'
+          if text.count(save_button) != 1:
+              raise SystemExit(f"Expected 1 save button marker, found {text.count(save_button)}")
+
+          legal_ui = '''                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 space-y-4">\n                    <div>\n                      <div className="text-xs font-black uppercase tracking-[0.14em] text-emerald-700">Legalitas & Sertifikasi</div>\n                      <h4 className="mt-1 font-black text-slate-900">CPPOB & Sertifikat SNI Produk</h4>\n                    </div>\n\n                    <div className="rounded-xl border border-emerald-200 bg-white p-4 space-y-3">\n                      <div className="text-xs font-black uppercase tracking-wider text-emerald-700">Izin Penerapan CPPOB</div>\n                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nomor PB-UMKU</label>\n                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobBusinessLicenseNumber || ""} onChange={e=>setSystemConfig({...systemConfig,cppobBusinessLicenseNumber:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nomor Izin CPPOB</label>\n                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobPermitNumber || ""} onChange={e=>setSystemConfig({...systemConfig,cppobPermitNumber:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Tanggal Terbit</label>\n                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobIssuedDate || ""} onChange={e=>setSystemConfig({...systemConfig,cppobIssuedDate:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Berlaku s.d.</label>\n                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobValidUntil || ""} onChange={e=>setSystemConfig({...systemConfig,cppobValidUntil:e.target.value})}/>\n                        </div>\n                        <div className="sm:col-span-2">\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Ruang Lingkup / Jenis Pangan</label>\n                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-emerald-500" value={systemConfig.cppobScope || ""} onChange={e=>setSystemConfig({...systemConfig,cppobScope:e.target.value})}/>\n                        </div>\n                      </div>\n                    </div>\n\n                    <div className="rounded-xl border border-blue-200 bg-white p-4 space-y-3">\n                      <div className="text-xs font-black uppercase tracking-wider text-blue-700">Sertifikat SNI Produk</div>\n                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nomor Sertifikat</label>\n                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniCertificateNumber || ""} onChange={e=>setSystemConfig({...systemConfig,sniCertificateNumber:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Standar SNI</label>\n                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniStandard || ""} onChange={e=>setSystemConfig({...systemConfig,sniStandard:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Nama Produk</label>\n                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniProduct || ""} onChange={e=>setSystemConfig({...systemConfig,sniProduct:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Merek</label>\n                          <input className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniBrand || ""} onChange={e=>setSystemConfig({...systemConfig,sniBrand:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Tanggal Terbit</label>\n                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniIssuedDate || ""} onChange={e=>setSystemConfig({...systemConfig,sniIssuedDate:e.target.value})}/>\n                        </div>\n                        <div>\n                          <label className="block text-xs font-bold text-slate-600 mb-1.5">Berlaku s.d.</label>\n                          <input type="date" className="w-full border border-slate-300 bg-white p-2.5 rounded-lg outline-none focus:border-blue-500" value={systemConfig.sniValidUntil || ""} onChange={e=>setSystemConfig({...systemConfig,sniValidUntil:e.target.value})}/>\n                        </div>\n                      </div>\n                    </div>\n                  </div>\n\n'''
+          text = text.replace(save_button, legal_ui + save_button, 1)
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Build application
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+
+      - name: Remove one-time workflow and commit
+        shell: bash
+        run: |
+          rm .github/workflows/legal-certification-update-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx .github/workflows/legal-certification-update-once.yml
+          git commit -m "feat: add legal certification data and update SNI"
+          git push origin HEAD:main
