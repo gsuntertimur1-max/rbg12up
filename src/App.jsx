@@ -281,6 +281,13 @@ const parseImportNumber = (value, label = "jumlah") => {
 
 const normalizeImportText = (value) => String(value ?? "").trim();
 
+const getImportCell = (row, names) => {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(row, name)) return row[name];
+  }
+  return "";
+};
+
 const normalizeImportQcDecision = (value, finished = true) => {
   const text = normalizeImportText(value).toUpperCase();
   if (text.includes("HOLD")) return "HOLD";
@@ -5086,6 +5093,7 @@ Masukkan alasan override Super Admin:`
           rowNo: index + 1,
           date: parseImportExcelDate(row["Tanggal Rebagging"], `Rebagging baris ${index + 1}`),
           moNumber: normalizeImportText(row["No MO/Produksi"]),
+          resultTmNumber: normalizeImportText(getImportCell(row, ["TM Hasil", "No TM Hasil", "TM Hasil Produk Jadi"])),
           processingLocation: normalizeImportText(row["Gudang Proses"]),
           rawSkuId: normalizeImportText(row["SKU Bahan Baku"]),
           rawSkuName: normalizeImportText(row["Nama Bahan Baku"]),
@@ -5110,6 +5118,7 @@ Masukkan alasan override Super Admin:`
           rowNo: index + 1,
           date: parseImportExcelDate(row["Tanggal QC"], `QC baris ${index + 1}`),
           moNumber: normalizeImportText(row["No MO/Produksi"]),
+          resultTmNumber: normalizeImportText(getImportCell(row, ["TM Hasil", "No TM Hasil", "TM Hasil Produk Jadi"])),
           warehouse: normalizeImportText(row["Gudang"]),
           skuId: normalizeImportText(row["SKU Produk"]),
           skuName: normalizeImportText(row["Nama Produk"]),
@@ -5119,6 +5128,24 @@ Masukkan alasan override Super Admin:`
           officer: normalizeImportText(row["Petugas QC"]) || "Petugas QC",
           note: normalizeImportText(row["Catatan QC"]) || "Import data lama",
         }));
+
+      const outboundSheetName = workbook.Sheets.Outbound ? "Outbound" : workbook.Sheets.Outbond ? "Outbond" : "";
+      const importedOutbound = outboundSheetName
+        ? readLegacyImportSheet(workbook, outboundSheetName)
+            .filter((row) => normalizeImportText(getImportCell(row, ["TM Hasil", "No TM Hasil", "TM Hasil Produk Jadi"])) || normalizeImportText(getImportCell(row, ["SKU Produk", "SKU", "SKU Barang"])))
+            .map((row, index) => ({
+              rowNo: index + 1,
+              date: parseImportExcelDate(getImportCell(row, ["Tanggal Outbound", "Tanggal Outbond", "Tanggal Keluar"]), `Outbound baris ${index + 1}`),
+              soNumber: normalizeImportText(getImportCell(row, ["No SO", "Nomor SO", "No Dokumen", "Dokumen"])),
+              customer: normalizeImportText(getImportCell(row, ["Pelanggan", "Tujuan", "Customer", "Nama Pelanggan"])),
+              skuId: normalizeImportText(getImportCell(row, ["SKU Produk", "SKU", "SKU Barang"])),
+              skuName: normalizeImportText(getImportCell(row, ["Nama Produk", "Nama Barang"])),
+              resultTmNumber: normalizeImportText(getImportCell(row, ["TM Hasil", "No TM Hasil", "TM Hasil Produk Jadi"])),
+              qty: parseImportNumber(getImportCell(row, ["Jumlah Keluar", "Qty Outbound", "Qty Outbond", "Jumlah Outbound", "Jumlah Outbond"]), `Outbound baris ${index + 1}`),
+              unit: normalizeImportText(getImportCell(row, ["Satuan", "Unit"])),
+              note: normalizeImportText(getImportCell(row, ["Keterangan", "Catatan"])),
+            }))
+        : [];
 
       if (importedInbound.length === 0 || importedRebagging.length === 0 || importedQc.length === 0) {
         throw new Error("Sheet Inbound, Rebagging, dan QC wajib berisi data.");
@@ -5134,6 +5161,7 @@ Masukkan alasan override Super Admin:`
           row.productSkuId,
         ]),
         ...importedQc.map((row) => row.skuId),
+        ...importedOutbound.map((row) => row.skuId),
       ].filter(Boolean);
       const missingSkus = [...new Set(allSkuIds.filter((skuId) => !skuMap.has(skuId)))];
       if (missingSkus.length > 0) {
@@ -5144,12 +5172,6 @@ Masukkan alasan override Super Admin:`
       const importLocationName = getLocationDisplayName(importLocation) || "Unit Gudang 17 (UP 17)";
       const importLocationId = importLocation?.id || "UP17";
       const importTargetStack = "Gula 17";
-      const tmHasilByMo = new Map(
-        [...new Set(importedRebagging.map((row) => row.moNumber).filter(Boolean))].map((mo, index) => [
-          mo,
-          `TM-HASIL-LAMA-${String(index + 1).padStart(3, "0")}`,
-        ])
-      );
 
       const importBatches = [];
       const importTransactions = [];
@@ -5315,11 +5337,14 @@ Masukkan alasan override Super Admin:`
         const administrativeWarehouses = [
           ...new Set(rawLines.map((line) => line.administrativeWarehouse).filter(Boolean)),
         ];
-        const resultTmNumber = tmHasilByMo.get(row.moNumber) || "";
         const qcMatch =
           importedQc[index] ||
           importedQc.find((qc) => qc.moNumber === row.moNumber && qc.skuId === row.productSkuId) ||
           {};
+        const resultTmNumber = row.resultTmNumber || qcMatch.resultTmNumber || "";
+        if (!resultTmNumber) {
+          throw new Error(`TM Hasil wajib diisi pada Rebagging/QC baris ${row.rowNo} (${row.moNumber}).`);
+        }
         const qcDecision = qcMatch.decision || "RELEASE";
         const qcStatus = getImportBatchStatus(qcDecision, true);
         const qcRecordId = `QC-FG-IMP-${String(index + 1).padStart(4, "0")}`;
@@ -5519,6 +5544,96 @@ Masukkan alasan override Super Admin:`
         importQcRecords.push({ id: qcRecordId, data: qcRecord });
       });
 
+      const consumeFinishedStock = (row) => {
+        if (!row.date || !row.skuId || !row.resultTmNumber || row.qty <= 0) {
+          throw new Error(`Outbound baris ${row.rowNo} belum lengkap. Tanggal, SKU, TM Hasil, dan jumlah wajib diisi.`);
+        }
+        const candidates = importBatches
+          .filter((item) => {
+            const batch = item.data;
+            return (
+              batch.qcType === "FINISHED" &&
+              batch.skuId === row.skuId &&
+              batch.resultTmNumber === row.resultTmNumber &&
+              batch.qcStatus === "RELEASED" &&
+              Number(batch.currentQty || 0) > 0
+            );
+          })
+          .sort((a, b) => {
+            const expiryA = new Date(a.data.expiryDate || a.data.date || 0).getTime() || 0;
+            const expiryB = new Date(b.data.expiryDate || b.data.date || 0).getTime() || 0;
+            if (expiryA !== expiryB) return expiryA - expiryB;
+            return new Date(a.data.date || 0) - new Date(b.data.date || 0);
+          });
+        let remaining = row.qty;
+        const selections = [];
+        for (const item of candidates) {
+          if (remaining <= 0.0001) break;
+          const batch = item.data;
+          if (new Date(row.date).getTime() < new Date(batch.date || batch.productionDate || 0).getTime()) {
+            throw new Error(`Tanggal Outbound baris ${row.rowNo} lebih awal dari tanggal produksi batch ${batch.batchId}.`);
+          }
+          const take = Math.min(Number(batch.currentQty || 0), remaining);
+          const sku = skuMap.get(row.skuId);
+          const weightPerPackKg = Number(batch.weightPerPackKg) || inferWeightPerPackKg(sku) || 0;
+          const outboundKg = take * weightPerPackKg;
+          batch.currentQty = Number((Number(batch.currentQty || 0) - take).toFixed(6));
+          batch.goodQty = Number(Math.max(0, Number(batch.goodQty || 0) - take).toFixed(6));
+          batch.goodKg = Number(Math.max(0, Number(batch.goodKg || 0) - outboundKg).toFixed(6));
+          remaining = Number((remaining - take).toFixed(6));
+          selections.push({ batch, qty: take, outboundKg, weightPerPackKg });
+        }
+        if (remaining > 0.0001) {
+          throw new Error(`Stok produk jadi tidak cukup untuk Outbound baris ${row.rowNo}: ${row.skuId} / ${row.resultTmNumber}. Kurang ${remaining}.`);
+        }
+        return selections;
+      };
+
+      importedOutbound.forEach((row, index) => {
+        const sku = skuMap.get(row.skuId);
+        const selections = consumeFinishedStock(row);
+        selections.forEach((selection, selectionIndex) => {
+          const batch = selection.batch;
+          const txId = `TRX-IMP-OUT-${String(index + 1).padStart(4, "0")}-${selectionIndex + 1}`;
+          importTransactions.push({
+            id: txId,
+            data: {
+              id: txId,
+              date: row.date,
+              type: "OUTBOUND",
+              skuId: row.skuId,
+              skuName: sku?.name || row.skuName,
+              qtyChange: selection.qty,
+              unit: sku?.unit || row.unit,
+              weightPerPackKg: selection.weightPerPackKg,
+              netWeightKg: selection.outboundKg,
+              operator: importUser,
+              batchId: batch.batchId,
+              sourceWarehouse: batch.sourceWarehouse || "",
+              administrativeWarehouse:
+                batch.administrativeWarehouse ||
+                (Array.isArray(batch.administrativeWarehouses)
+                  ? batch.administrativeWarehouses.join(", ")
+                  : ""),
+              administrativeWarehouses: batch.administrativeWarehouses || [],
+              physicalLocation: batch.physicalLocation || importLocationName,
+              physicalLocationName: batch.physicalLocationName || batch.physicalLocation || importLocationName,
+              resultTmNumber: row.resultTmNumber,
+              mainMoNumber: batch.mainMoNumber || batch.moNumber || "",
+              moNumber: batch.moNumber || "",
+              sourceMoNumbers: batch.sourceMoNumbers || [],
+              sourceTmNumbers: batch.sourceTmNumbers || [],
+              soNumber: row.soNumber,
+              customer: row.customer,
+              note: row.note,
+              qcStatus: batch.qcStatus,
+              qcLastRecordId: batch.qcLastRecordId || "",
+              ...importAudit,
+            },
+          });
+        });
+      });
+
       availableBatches.forEach((batch) => {
         const target = importBatches.find((item) => item.id === batch.batchId);
         if (target) target.data.currentQty = Number(Number(batch.remaining || 0).toFixed(6));
@@ -5566,8 +5681,22 @@ Masukkan alasan override Super Admin:`
         });
       }
 
-      for (const [resultTmNumber, moNumber] of [...tmHasilByMo.entries()].map(([mo, tm]) => [tm, mo])) {
-        const related = importBatches.filter((item) => item.data.mainMoNumber === moNumber && item.data.qcType === "FINISHED");
+      const tmBindingGroups = new Map();
+      importBatches
+        .filter((item) => item.data.qcType === "FINISHED" && item.data.resultTmNumber)
+        .forEach((item) => {
+          const key = `${item.data.resultTmNumber}||${item.data.mainMoNumber}`;
+          if (!tmBindingGroups.has(key)) {
+            tmBindingGroups.set(key, {
+              resultTmNumber: item.data.resultTmNumber,
+              moNumber: item.data.mainMoNumber,
+              related: [],
+            });
+          }
+          tmBindingGroups.get(key).related.push(item);
+        });
+
+      for (const { resultTmNumber, moNumber, related } of tmBindingGroups.values()) {
         importTmBindings.push({
           id: getStableDocId(resultTmNumber),
           data: {
@@ -5653,7 +5782,7 @@ Masukkan alasan override Super Admin:`
       setRebagMaterialSelections({});
       showNotif("Import data lama berhasil");
       alert(
-        `Import data lama selesai.\n\nInbound: ${importedInbound.length} baris\nRebagging: ${importedRebagging.length} baris\nQC: ${importedQc.length} baris\nBatch produk jadi otomatis: ${importedRebagging.length}\nTM Hasil otomatis: ${tmHasilByMo.size}`
+        `Import data lama selesai.\n\nInbound: ${importedInbound.length} baris\nRebagging: ${importedRebagging.length} baris\nQC: ${importedQc.length} baris\nOutbound: ${importedOutbound.length} baris\nBatch produk jadi otomatis: ${importedRebagging.length}\nTM Hasil dari Excel: ${tmBindingGroups.size}`
       );
     } catch (error) {
       console.error("Legacy Import Error:", error);
@@ -8151,7 +8280,7 @@ Masukkan alasan override Super Admin:`
                         <p className="text-xs font-bold uppercase tracking-wider text-violet-500">Import Data Lama</p>
                         <p className="mt-2 text-sm font-black text-violet-950">Ganti data operasional dengan Excel Inbound, Rebagging, dan QC</p>
                         <p className="mt-1 text-xs leading-5 text-violet-800">
-                          Menghapus data operasional saat ini, membuat arsip otomatis, lalu mengisi ulang transaksi, stok batch, QC, TM Hasil, dan sequence batch. Batch produk jadi digenerate otomatis sesuai tanggal produksi.
+                          Menghapus data operasional saat ini, membuat arsip otomatis, lalu mengisi ulang transaksi, stok batch, QC, Outbound, TM Hasil dari Excel, dan sequence batch. Batch produk jadi digenerate otomatis sesuai tanggal produksi.
                         </p>
                         <label className={`mt-4 inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-black text-white shadow-lg transition-all ${legacyImportLoading || resetHistoryLoading ? "cursor-not-allowed bg-slate-300 shadow-none" : "cursor-pointer bg-violet-600 shadow-violet-100 hover:bg-violet-700"}`}>
                           <FileUp size={18}/>
