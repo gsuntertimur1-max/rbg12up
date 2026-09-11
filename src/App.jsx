@@ -2525,6 +2525,13 @@ export default function App() {
     { rowId: "IN-1", skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }
   ]);
   const [outboundSelections, setOutboundSelections] = useState({});
+  const [mutationForm, setMutationForm] = useState({
+    skuId: "",
+    batchId: "",
+    qty: "",
+    targetLocation: "",
+    note: "",
+  });
   const [rebagMaterialSelections, setRebagMaterialSelections] = useState({});
   const [processResolution, setProcessResolution] = useState({
     batchId: "",
@@ -2724,12 +2731,29 @@ export default function App() {
 
   const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   const hasAccess = (roles) => currentUser && roles.includes(currentUser.role);
+  const canUseInbound = hasAccess(["Super Admin", "Admin"]);
+  const canUseRebagging = hasAccess(["Super Admin", "Admin", "Operator"]);
+  const canUseMutation = hasAccess(["Super Admin", "Admin"]);
+  const canUseOutbound = hasAccess(["Super Admin", "Admin"]);
+  const operationTabs = [
+    canUseInbound && { key: "inbound", label: "Inbound", icon: PackagePlus, activeClass: "bg-blue-600 text-white shadow-lg shadow-blue-100" },
+    canUseRebagging && { key: "rebagging", label: "Rebagging", icon: Settings2, activeClass: "bg-red-600 text-white shadow-lg shadow-red-100" },
+    canUseMutation && { key: "mutation", label: "Mutasi", icon: ArrowRightLeft, activeClass: "bg-violet-600 text-white shadow-lg shadow-violet-100" },
+    canUseOutbound && { key: "outbound", label: "Outbound", icon: ArrowRightLeft, activeClass: "bg-orange-500 text-white shadow-lg shadow-orange-100" },
+  ].filter(Boolean);
   const isVerifiedSuperAdmin = Boolean(
     currentUser?.role === "Super Admin" &&
     users.some(
       (u) => u.username === currentUser.username && u.role === "Super Admin"
     )
   );
+
+  useEffect(() => {
+    if (!currentUser || operationTabs.length === 0) return;
+    if (!operationTabs.some((tab) => tab.key === activeOpTab)) {
+      setActiveOpTab(operationTabs[0].key);
+    }
+  }, [currentUser, activeOpTab, operationTabs]);
 
   const selectedRebagTargetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
   const activeRebagRecipe = getRebagRecipe(selectedRebagTargetSku, rebagRecipes);
@@ -2867,6 +2891,16 @@ export default function App() {
     setOutboundSelections({});
   };
 
+  const handleMutationSkuChange = (value) => {
+    setMutationForm({
+      skuId: value,
+      batchId: "",
+      qty: "",
+      targetLocation: "",
+      note: "",
+    });
+  };
+
   const handleBackdateDateTimeChange = (value) => {
     setFormData((prev) => {
       const next = { ...prev, backdateDateTime: value };
@@ -2941,6 +2975,7 @@ export default function App() {
 
     try {
       if (activeOpTab === "inbound") {
+        if (!canUseInbound) return alert("Anda tidak memiliki akses untuk proses Inbound.");
         const normalizedLines = inboundLines.map((line) => ({
           ...line,
           sku: skus.find((s) => s.id === line.skuId),
@@ -3016,6 +3051,7 @@ export default function App() {
 
         await batch.commit();
       } else if (activeOpTab === "rebagging") {
+        if (!canUseRebagging) return alert("Anda tidak memiliki akses untuk proses Rebagging.");
         const targetSku = skus.find((s) => s.id === formData.rebagTargetSkuId);
         const qty = Number(formData.qtyToProcess);
         const goodQty = Number(formData.rebagGoodQty || 0);
@@ -3655,7 +3691,129 @@ Masukkan alasan override Super Admin:`
             );
           });
         });
+      } else if (activeOpTab === "mutation") {
+        if (!canUseMutation) return alert("Anda tidak memiliki akses untuk proses Mutasi.");
+
+        const sku = skus.find((s) => s.id === mutationForm.skuId);
+        const sourceBatch = inventoryBatches.find((b) => b.batchId === mutationForm.batchId);
+        const qty = Number(mutationForm.qty);
+        const targetLocation = String(mutationForm.targetLocation || "").trim();
+        const note = String(mutationForm.note || "").trim();
+
+        if (!sku) return alert("Pilih SKU yang akan dimutasi.");
+        if (!sourceBatch || sourceBatch.skuId !== sku.id) return alert("Pilih batch sumber yang valid.");
+        if (!Number.isFinite(qty) || qty <= 0) return alert("Jumlah mutasi harus lebih dari 0.");
+        if (!targetLocation) return alert("Isi lokasi/gudang tujuan mutasi.");
+
+        const sourceLocation =
+          sourceBatch.targetStack ||
+          sourceBatch.physicalLocationName ||
+          sourceBatch.physicalLocation ||
+          sourceBatch.sourceWarehouse ||
+          "";
+
+        if (sourceLocation && sourceLocation.toUpperCase() === targetLocation.toUpperCase()) {
+          return alert("Lokasi tujuan mutasi harus berbeda dari lokasi asal.");
+        }
+
+        if (sourceBatch.date && new Date(date).getTime() < new Date(sourceBatch.date).getTime()) {
+          return alert("Tanggal mutasi tidak boleh lebih awal dari tanggal masuk batch sumber.");
+        }
+
+        const mutationTxId = `TRX-MUT-${timestamp}`;
+        const mutationBatchId = `${sourceBatch.batchId}-MUT-${timestamp}`;
+
+        await runTransaction(db, async (transaction) => {
+          const sourceRef = doc(db, "artifacts", appId, "public", "data", "batches", sourceBatch.batchId);
+          const targetRef = doc(db, "artifacts", appId, "public", "data", "batches", mutationBatchId);
+          const txRef = doc(db, "artifacts", appId, "public", "data", "transactions", mutationTxId);
+          const sourceSnap = await transaction.get(sourceRef);
+
+          if (!sourceSnap.exists()) throw new Error("Batch sumber mutasi tidak ditemukan.");
+          const liveBatch = sourceSnap.data();
+          const liveQty = Number(liveBatch.currentQty || 0);
+          const liveGoodQty = Number(liveBatch.goodQty ?? liveQty);
+          const liveWeightPerPackKg =
+            Number(liveBatch.weightPerPackKg) || inferWeightPerPackKg(sku) || 0;
+          const isFinishedGoods = sku.type === "rebagged";
+          const movedKg = isFinishedGoods
+            ? qty * liveWeightPerPackKg
+            : (String(sku.unit || "").toUpperCase() === "KG" ? qty : 0);
+          const liveGoodKg = Number(liveBatch.goodKg) || liveGoodQty * liveWeightPerPackKg;
+
+          if (liveBatch.skuId !== sku.id) {
+            throw new Error("Batch sumber tidak sesuai dengan SKU yang dipilih.");
+          }
+          if (qty > liveQty) {
+            throw new Error(`Jumlah mutasi melebihi stok terbaru (${liveQty}).`);
+          }
+
+          transaction.update(sourceRef, {
+            currentQty: liveQty - qty,
+            ...(isFinishedGoods
+              ? {
+                  goodQty: Math.max(0, liveGoodQty - qty),
+                  goodKg: Math.max(0, liveGoodKg - movedKg),
+                }
+              : {}),
+          });
+
+          transaction.set(targetRef, {
+            ...liveBatch,
+            batchId: mutationBatchId,
+            parentBatchId: liveBatch.batchId,
+            mutationSourceBatchId: liveBatch.batchId,
+            initialQty: qty,
+            currentQty: qty,
+            ...(isFinishedGoods
+              ? {
+                  goodQty: qty,
+                  goodKg: movedKg,
+                }
+              : {}),
+            sourceWarehouse: targetLocation,
+            targetStack: isFinishedGoods ? targetLocation : (liveBatch.targetStack || ""),
+            physicalLocationName: targetLocation,
+            physicalLocation: targetLocation,
+            mutationFromLocation: sourceLocation,
+            mutationToLocation: targetLocation,
+            mutationAt: date,
+            mutationBy: currentUser.username,
+            date: liveBatch.date || date,
+            ...auditMeta,
+          });
+
+          transaction.set(txRef, {
+            id: mutationTxId,
+            date,
+            type: "MUTATION",
+            skuId: sku.id,
+            skuName: sku.name,
+            qtyChange: 0,
+            mutationQty: qty,
+            unit: sku.unit,
+            weightPerPackKg: isFinishedGoods ? liveWeightPerPackKg : null,
+            netWeightKg: movedKg,
+            operator: currentUser.username,
+            sourceBatchId: liveBatch.batchId,
+            targetBatchId: mutationBatchId,
+            batchId: mutationBatchId,
+            fromLocation: sourceLocation,
+            toLocation: targetLocation,
+            sourceWarehouse: sourceLocation,
+            targetStack: targetLocation,
+            moNumber: liveBatch.moNumber || "",
+            sourceMoNumbers: liveBatch.sourceMoNumbers || [],
+            sourceTmNumbers: liveBatch.sourceTmNumbers || [],
+            tmNumber: liveBatch.tmNumber || "",
+            resultTmNumber: liveBatch.resultTmNumber || "",
+            expiryDate: liveBatch.expiryDate || "",
+            note,
+            ...auditMeta,
+          });
+        });
       } else if (activeOpTab === "outbound") {
+        if (!canUseOutbound) return alert("Anda tidak memiliki akses untuk proses Outbound.");
         const sku = skus.find((s) => s.id === formData.outSkuId);
         if (!sku) return alert("Pilih barang yang akan dikeluarkan.");
 
@@ -3864,6 +4022,7 @@ Masukkan alasan override Super Admin:`
         { rowId: `IN-${Date.now()}`, skuId: "", qty: "", moNumber: "", tmNumber: "", sourceWarehouse: "" }
       ]);
       setOutboundSelections({});
+      setMutationForm({ skuId: "", batchId: "", qty: "", targetLocation: "", note: "" });
       setRebagMaterialSelections({});
     } catch (error) {
       console.error("Transaction Error:", error);
@@ -6512,24 +6671,19 @@ Masukkan alasan override Super Admin:`
                <div className="bg-white p-4 sm:p-8 rounded-2xl shadow-sm border border-slate-200">
                   <div className="mb-8 overflow-x-auto pb-1">
                     <div className="inline-flex min-w-max items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner">
-                      <button
-                        onClick={()=>setActiveOpTab('inbound')}
-                        className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='inbound'?'bg-blue-600 text-white shadow-lg shadow-blue-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
-                      >
-                        <PackagePlus size={17}/> Inbound
-                      </button>
-                      <button
-                        onClick={()=>setActiveOpTab('rebagging')}
-                        className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='rebagging'?'bg-red-600 text-white shadow-lg shadow-red-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
-                      >
-                        <Settings2 size={17}/> Rebagging
-                      </button>
-                      <button
-                        onClick={()=>setActiveOpTab('outbound')}
-                        className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab==='outbound'?'bg-orange-500 text-white shadow-lg shadow-orange-100':'text-slate-500 hover:bg-white hover:text-slate-800'}`}
-                      >
-                        <ArrowRightLeft size={17}/> Outbound
-                      </button>
+                      {operationTabs.map((tab) => {
+                        const Icon = tab.icon;
+                        return (
+                          <button
+                            key={tab.key}
+                            type="button"
+                            onClick={()=>setActiveOpTab(tab.key)}
+                            className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${activeOpTab===tab.key?tab.activeClass:'text-slate-500 hover:bg-white hover:text-slate-800'}`}
+                          >
+                            <Icon size={17}/> {tab.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                   <form onSubmit={handleTransactionSubmit} className="space-y-5 max-w-3xl">
@@ -6553,7 +6707,7 @@ Masukkan alasan override Super Admin:`
                           />
                           <div>
                             <div className="font-black text-amber-900 text-sm">Mode Backdate — Khusus Super Admin</div>
-                            <div className="text-xs text-amber-700">Berlaku untuk Inbound, Rebagging, dan Outbound.</div>
+                            <div className="text-xs text-amber-700">Berlaku untuk Inbound, Rebagging, Mutasi, dan Outbound.</div>
                           </div>
                         </label>
                         {formData.useBackdate && (
@@ -7146,8 +7300,134 @@ Masukkan alasan override Super Admin:`
                               {STACK_LOCATIONS.map(l=><option key={l} value={l}>{l}</option>)}
                             </select>
                           </div>
+	                        </div>
+	                      </>
+	                    )}
+                    {activeOpTab === 'mutation' && (
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-4">
+                          <div className="flex items-start gap-3">
+                            <ArrowRightLeft size={20} className="mt-0.5 shrink-0 text-violet-600"/>
+                            <div>
+                              <h3 className="font-black text-violet-900">Mutasi Antar Lokasi</h3>
+                              <p className="mt-1 text-xs leading-5 text-violet-700">
+                                Memindahkan stok dari satu batch/lokasi ke lokasi lain tanpa mengubah total persediaan.
+                              </p>
+                            </div>
+                          </div>
                         </div>
-                      </>
+
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2">Pilih SKU</label>
+                          <SearchableSelect
+                            options={skus.map(s=>({value:s.id,label:`${s.id} - ${s.name}`}))}
+                            value={mutationForm.skuId}
+                            onChange={handleMutationSkuChange}
+                            placeholder="Cari SKU yang akan dimutasi..."
+                          />
+                        </div>
+
+                        {mutationForm.skuId && (
+                          <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Batch Sumber</label>
+                            <select
+                              className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-violet-500 bg-white"
+                              value={mutationForm.batchId}
+                              onChange={e=>setMutationForm({...mutationForm,batchId:e.target.value,qty:""})}
+                              required
+                            >
+                              <option value="">-- Pilih batch stok aktif --</option>
+                              {sortBatchesFefoFifo(
+                                inventoryBatches.filter(b=>b.skuId===mutationForm.skuId && Number(b.currentQty||0)>0)
+                              ).map(b=>{
+                                const sku=skus.find(s=>s.id===b.skuId);
+                                const location=b.targetStack||b.physicalLocationName||b.physicalLocation||b.sourceWarehouse||"-";
+                                return (
+                                  <option key={b.batchId} value={b.batchId}>
+                                    {b.batchId} · {location} · Stok {formatStockNumber(b.currentQty)} {sku?.unit||""}{b.resultTmNumber?` · TM Hasil ${b.resultTmNumber}`:""}{b.tmNumber?` · TM ${b.tmNumber}`:""}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        )}
+
+                        {mutationForm.batchId && (() => {
+                          const selectedBatch=inventoryBatches.find(b=>b.batchId===mutationForm.batchId);
+                          const selectedSku=skus.find(s=>s.id===mutationForm.skuId);
+                          const currentLocation=selectedBatch?.targetStack||selectedBatch?.physicalLocationName||selectedBatch?.physicalLocation||selectedBatch?.sourceWarehouse||"-";
+                          const locationOptions=[
+                            ...new Set([
+                              ...DEFAULT_LOCATIONS.filter(locationSupportsStorage).map(getLocationDisplayName),
+                              ...STACK_LOCATIONS,
+                              ...inventoryBatches.map(b=>b.targetStack||b.physicalLocationName||b.physicalLocation||b.sourceWarehouse).filter(Boolean),
+                            ].filter(Boolean))
+                          ].filter(location=>location!==currentLocation);
+                          return (
+                            <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4 text-xs">
+                                <div>
+                                  <span className="font-black text-slate-400">Lokasi Asal</span>
+                                  <div className="mt-1 font-bold text-slate-800">{currentLocation}</div>
+                                </div>
+                                <div>
+                                  <span className="font-black text-slate-400">Stok Tersedia</span>
+                                  <div className="mt-1 font-bold text-blue-700">{formatStockNumber(selectedBatch?.currentQty)} {selectedSku?.unit||""}</div>
+                                </div>
+                                <div>
+                                  <span className="font-black text-slate-400">MO / TM</span>
+                                  <div className="mt-1 font-bold text-slate-800">{selectedBatch?.moNumber||selectedBatch?.mainMoNumber||"-"} / {selectedBatch?.tmNumber||selectedBatch?.resultTmNumber||"-"}</div>
+                                </div>
+                                <div>
+                                  <span className="font-black text-slate-400">Expired</span>
+                                  <div className="mt-1 font-bold text-slate-800">{formatPdfDate(selectedBatch?.expiryDate)||"-"}</div>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="block text-sm font-bold text-slate-700 mb-2">Jumlah Mutasi</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={selectedBatch?.currentQty || undefined}
+                                    className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-violet-500"
+                                    value={mutationForm.qty}
+                                    onChange={e=>setMutationForm({...mutationForm,qty:e.target.value})}
+                                    placeholder="0"
+                                    required
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-bold text-slate-700 mb-2">Lokasi Tujuan</label>
+                                  <input
+                                    list="mutation-location-options"
+                                    className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-violet-500"
+                                    value={mutationForm.targetLocation}
+                                    onChange={e=>setMutationForm({...mutationForm,targetLocation:e.target.value})}
+                                    placeholder="Pilih atau ketik lokasi tujuan"
+                                    required
+                                  />
+                                  <datalist id="mutation-location-options">
+                                    {locationOptions.map(location=><option key={location} value={location}/>)}
+                                  </datalist>
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Keterangan <span className="font-normal text-slate-400">(opsional)</span></label>
+                                <textarea
+                                  rows="2"
+                                  className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-violet-500 resize-y"
+                                  value={mutationForm.note}
+                                  onChange={e=>setMutationForm({...mutationForm,note:e.target.value})}
+                                  placeholder="Contoh: pindah tumpukan, pindah gudang, atau penyesuaian lokasi fisik"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
                     )}
                     {activeOpTab === 'outbound' && (
                       <>
