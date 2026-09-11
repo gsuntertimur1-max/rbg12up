@@ -12,6 +12,17 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import { jsPDF } from "jspdf";
+import OperationalActionCenter from "./components/OperationalActionCenter";
+import IntegrityPanel from "./components/IntegrityPanel";
+import InventoryMobileCards from "./components/InventoryMobileCards";
+import {
+  buildLegacyImportPreview,
+  formatLegacyImportPreview,
+  buildStockIntegrityReport,
+  checkClosedPeriod,
+  serializeOperationalArchiveRows,
+  parseOperationalArchiveWorkbook,
+} from "./lib/operationalEnhancements";
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp, getApps, getApp } from "firebase/app";
@@ -45,6 +56,7 @@ const DEFAULT_SYSTEM_CONFIG = {
   sniBrand: "Maniskita",
   sniIssuedDate: "2026-07-30",
   sniValidUntil: "2030-07-29",
+  closedThroughMonth: "",
 };
 
 const DEFAULT_LOCATIONS = [
@@ -2519,6 +2531,9 @@ export default function App() {
   const [traceTmQuery, setTraceTmQuery] = useState("");
   const [resetHistoryLoading, setResetHistoryLoading] = useState(false);
   const [legacyImportLoading, setLegacyImportLoading] = useState(false);
+  const [restoreArchiveLoading, setRestoreArchiveLoading] = useState(false);
+  const [integrityReport, setIntegrityReport] = useState(null);
+  const [inventoryPriorityFilter, setInventoryPriorityFilter] = useState("");
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -2978,10 +2993,28 @@ export default function App() {
       date = selectedDate.toISOString();
     }
 
+    let periodLockOverrideReason = "";
+    const periodLockStatus = checkClosedPeriod(date, systemConfig.closedThroughMonth);
+    if (periodLockStatus.closed) {
+      if (!isVerifiedSuperAdmin) {
+        return alert(`Periode ${periodLockStatus.transactionMonth} sudah dikunci sampai ${periodLockStatus.closedThroughMonth}. Hubungi Super Admin.`);
+      }
+      const reason = window.prompt(
+        `PERIODE TERKUNCI: ${periodLockStatus.transactionMonth}\nDikunci s.d. ${periodLockStatus.closedThroughMonth}.\n\nMasukkan alasan override Super Admin:`
+      );
+      if (!reason || reason.trim().length < 5) {
+        return alert("Alasan override periode terkunci wajib diisi minimal 5 karakter.");
+      }
+      periodLockOverrideReason = reason.trim();
+    }
+
     const auditMeta = {
       recordedAt,
       isBackdated: backdateRequested,
       backdatedBy: backdateRequested ? currentUser.username : "",
+      periodLockOverride: Boolean(periodLockOverrideReason),
+      periodLockOverrideReason,
+      periodLockOverrideBy: periodLockOverrideReason ? currentUser.username : "",
     };
 
     try {
@@ -3780,6 +3813,10 @@ Masukkan alasan override Super Admin:`
               ? {
                   goodQty: qty,
                   goodKg: movedKg,
+                  processQty: 0,
+                  processKg: 0,
+                  damageQty: 0,
+                  damageKg: 0,
                 }
               : {}),
             sourceWarehouse: targetLocation,
@@ -4060,6 +4097,18 @@ Masukkan alasan override Super Admin:`
     const sku = skus.find((s) => s.id === batch.skuId);
     const timestamp = Date.now();
     const date = new Date(timestamp).toISOString();
+    let processPeriodOverrideReason = "";
+    const processPeriodStatus = checkClosedPeriod(date, systemConfig.closedThroughMonth);
+    if (processPeriodStatus.closed) {
+      if (!isVerifiedSuperAdmin) {
+        return alert(`Periode ${processPeriodStatus.transactionMonth} sudah dikunci sampai ${processPeriodStatus.closedThroughMonth}.`);
+      }
+      const reason = window.prompt(
+        `PERIODE TERKUNCI: ${processPeriodStatus.transactionMonth}\nMasukkan alasan override untuk tindak lanjut PROCESS:`
+      );
+      if (!reason || reason.trim().length < 5) return alert("Alasan override wajib diisi minimal 5 karakter.");
+      processPeriodOverrideReason = reason.trim();
+    }
     const batchRef = doc(db, "artifacts", appId, "public", "data", "batches", batch.batchId);
     const txId = `TRX-PRC-${timestamp}`;
 
@@ -4110,6 +4159,9 @@ Masukkan alasan override Super Admin:`
             recordedAt: date,
             isBackdated: false,
             backdatedBy: "",
+            periodLockOverride: Boolean(processPeriodOverrideReason),
+            periodLockOverrideReason: processPeriodOverrideReason,
+            periodLockOverrideBy: processPeriodOverrideReason ? currentUser.username : "",
             type: outcome === "GOOD" ? "PROCESS_TO_GOOD" : "PROCESS_TO_DAMAGE",
             skuId: liveBatch.skuId,
             skuName: sku?.name || liveBatch.skuId || "",
@@ -4505,6 +4557,20 @@ Masukkan alasan override Super Admin:`
       skuRows,
     };
   }, [inventoryBatches, skus]);
+
+  const priorityInventoryBatches = useMemo(() => {
+    if (!inventoryPriorityFilter) return [];
+    return inventoryBatches
+      .filter((batch) => Number(batch.currentQty || 0) > 0 || Number(batch.processQty || 0) > 0 || Number(batch.damageQty || 0) > 0)
+      .filter((batch) => {
+        const info = getBatchExpiryInfo(batch);
+        if (inventoryPriorityFilter === "expired") return info.isExpired;
+        if (inventoryPriorityFilter === "near30") return !info.isExpired && info.daysRemaining !== null && info.daysRemaining <= 30;
+        if (inventoryPriorityFilter === "near90") return !info.isExpired && info.daysRemaining !== null && info.daysRemaining > 30 && info.daysRemaining <= 90;
+        return false;
+      })
+      .sort((a, b) => getBatchExpiryInfo(a).priority - getBatchExpiryInfo(b).priority);
+  }, [inventoryBatches, inventoryPriorityFilter]);
 
   const stockByWarehouseData = useMemo(() => {
     const data = {};
@@ -5122,6 +5188,12 @@ Masukkan alasan override Super Admin:`
     }
   };
 
+  const handleRunIntegrityCheck = () => {
+    const report = buildStockIntegrityReport(transactions, inventoryBatches);
+    setIntegrityReport(report);
+    showNotif(report.ok ? "Cek konsistensi: data sesuai" : `Cek konsistensi: ${report.discrepancies.length + report.criticalIssues.length} temuan`);
+  };
+
   const handleUpdateConfig = async (e) => {
     e.preventDefault();
     if (db) await setDoc(doc(db, "artifacts", appId, "public", "data", "config", "system"), systemConfig);
@@ -5135,7 +5207,6 @@ Masukkan alasan override Super Admin:`
       "tm_mo_bindings",
       "batch_sequences",
       "result_tms",
-      "qc_records",
       "qc_records",
     ];
 
@@ -5152,7 +5223,7 @@ Masukkan alasan override Super Admin:`
     return snapshots;
   };
 
-  const downloadOperationalArchive = (snapshots) => {
+  const downloadOperationalArchive = (snapshots, filePrefix = "Arsip_Data_Operasional") => {
     const wb = XLSX.utils.book_new();
     const sheetMap = [
       ["transactions", "Transactions"],
@@ -5164,7 +5235,7 @@ Masukkan alasan override Super Admin:`
     ];
 
     sheetMap.forEach(([key, sheetName]) => {
-      const rows = snapshots[key] || [];
+      const rows = serializeOperationalArchiveRows(snapshots[key] || []);
       const sheet = XLSX.utils.json_to_sheet(
         rows.length > 0 ? rows : [{ Keterangan: "Tidak ada data" }]
       );
@@ -5176,7 +5247,7 @@ Masukkan alasan override Super Admin:`
       .replace(/[:.]/g, "-")
       .replace("T", "_")
       .slice(0, 19);
-    XLSX.writeFile(wb, `Arsip_Data_Operasional_${stamp}.xlsx`);
+    XLSX.writeFile(wb, `${filePrefix}_${stamp}.xlsx`);
   };
 
   const handleArchiveOperationalData = async () => {
@@ -5198,6 +5269,82 @@ Masukkan alasan override Super Admin:`
     }
   };
 
+
+  const handleRestoreOperationalArchive = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!isVerifiedSuperAdmin) return alert("Restore arsip hanya tersedia untuk Super Admin yang terverifikasi.");
+    if (!db) return alert("Database belum siap.");
+
+    try {
+      setRestoreArchiveLoading(true);
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { cellDates: true });
+      const restored = parseOperationalArchiveWorkbook(workbook);
+      const collectionNames = [
+        "transactions",
+        "batches",
+        "tm_mo_bindings",
+        "batch_sequences",
+        "result_tms",
+        "qc_records",
+      ];
+      const counts = Object.fromEntries(collectionNames.map((name) => [name, restored[name]?.length || 0]));
+      const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+      if (!total) return alert("Arsip tidak berisi data operasional yang dapat direstore.");
+
+      const preview = [
+        "PREVIEW RESTORE ARSIP",
+        "",
+        `Transactions: ${counts.transactions}`,
+        `Batches: ${counts.batches}`,
+        `TM-MO: ${counts.tm_mo_bindings}`,
+        `Batch Sequence: ${counts.batch_sequences}`,
+        `Legacy TM: ${counts.result_tms}`,
+        `Quality Control: ${counts.qc_records}`,
+        "",
+        "Data operasional saat ini akan dibackup otomatis sebelum diganti.",
+      ].join("\n");
+      if (!window.confirm(`${preview}\n\nLanjutkan Restore?`)) return;
+      const verification = window.prompt('Ketik tepat "RESTORE ARSIP" untuk melanjutkan.');
+      if (verification !== "RESTORE ARSIP") return alert("Konfirmasi tidak sesuai. Restore dibatalkan.");
+
+      const currentSnapshot = await getOperationalArchiveSnapshot();
+      downloadOperationalArchive(currentSnapshot, "Backup_Sebelum_Restore");
+
+      const chunkSize = 400;
+      for (const collectionName of collectionNames) {
+        const current = await getDocs(collection(db, "artifacts", appId, "public", "data", collectionName));
+        for (let i = 0; i < current.docs.length; i += chunkSize) {
+          const batch = writeBatch(db);
+          current.docs.slice(i, i + chunkSize).forEach((item) => batch.delete(item.ref));
+          await batch.commit();
+        }
+      }
+
+      const writes = collectionNames.flatMap((collectionName) =>
+        (restored[collectionName] || []).map((row) => ({ collectionName, row }))
+      );
+      for (let i = 0; i < writes.length; i += chunkSize) {
+        const batch = writeBatch(db);
+        writes.slice(i, i + chunkSize).forEach(({ collectionName, row }) => {
+          const { _docId, ...data } = row;
+          batch.set(doc(db, "artifacts", appId, "public", "data", collectionName, String(_docId)), data);
+        });
+        await batch.commit();
+      }
+
+      showNotif(`Restore arsip selesai: ${total} dokumen operasional`);
+      setIntegrityReport(null);
+    } catch (error) {
+      console.error("Restore Operational Archive Error:", error);
+      alert(`Gagal restore arsip: ${error.message || "Terjadi kesalahan tidak diketahui."}`);
+    } finally {
+      setRestoreArchiveLoading(false);
+    }
+  };
+
   const readLegacyImportSheet = (workbook, sheetName) => {
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) throw new Error(`Sheet ${sheetName} tidak ditemukan.`);
@@ -5216,16 +5363,6 @@ Masukkan alasan override Super Admin:`
       return alert("Akses import data lama hanya tersedia untuk Super Admin yang terverifikasi.");
     }
     if (!db) return alert("Database belum siap. Silakan muat ulang aplikasi.");
-
-    const firstConfirm = window.confirm(
-      "IMPORT DATA LAMA akan menghapus SELURUH data operasional saat ini lalu menggantinya dengan data Inbound, Rebagging, dan QC dari Excel.\n\nMaster SKU, Komposisi, Pengguna, Lokasi, dan Konfigurasi tetap dipertahankan.\n\nSistem akan mengunduh arsip data operasional sebelum import.\n\nLanjutkan?"
-    );
-    if (!firstConfirm) return;
-
-    const verification = window.prompt('Ketik tepat "IMPORT DATA LAMA" untuk melanjutkan.');
-    if (verification !== "IMPORT DATA LAMA") {
-      return alert("Konfirmasi tidak sesuai. Import dibatalkan.");
-    }
 
     const importStartedAt = new Date().toISOString();
     const importUser = currentUser?.username || "superadmin";
@@ -5316,6 +5453,23 @@ Masukkan alasan override Super Admin:`
               note: normalizeImportText(getImportCell(row, ["Keterangan", "Catatan"])),
             }))
         : [];
+
+      const importPreview = buildLegacyImportPreview({
+        importedInbound,
+        importedRebagging,
+        importedQc,
+        importedOutbound,
+      });
+      const importPreviewText = formatLegacyImportPreview(importPreview);
+      if (importPreview.blockingIssues.length > 0) {
+        alert(`${importPreviewText}\n\nIMPORT DIBLOKIR. Perbaiki Excel terlebih dahulu.`);
+        return;
+      }
+      if (!window.confirm(`${importPreviewText}\n\nTidak ditemukan error pemblokir. Lanjutkan import?`)) return;
+      const verification = window.prompt('Ketik tepat "IMPORT DATA LAMA" untuk mengganti data operasional.');
+      if (verification !== "IMPORT DATA LAMA") {
+        return alert("Konfirmasi tidak sesuai. Import dibatalkan.");
+      }
 
       if (importedInbound.length === 0 || importedRebagging.length === 0 || importedQc.length === 0) {
         throw new Error("Sheet Inbound, Rebagging, dan QC wajib berisi data.");
@@ -6263,9 +6417,9 @@ Masukkan alasan override Super Admin:`
 
         <nav className="p-4 flex-1 space-y-1.5 text-sm mt-2">
           <button onClick={()=>handleNavClick("dashboard")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="dashboard"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Home size={18}/> Dashboard</button>
-          <button onClick={()=>handleNavClick("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/> Inventori Gudang</button>
+          <button onClick={()=>handleNavClick("inventory")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="inventory"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Boxes size={18}/><span className="flex-1 text-left">Inventori Gudang</span>{(dashboardSummary.expiredCount+dashboardSummary.nearExpired30)>0&&<span className="rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-black text-slate-900">{dashboardSummary.expiredCount+dashboardSummary.nearExpired30}</span>}</button>
           {hasAccess(["Super Admin", "Admin", "Operator"]) && <button onClick={()=>handleNavClick("operations")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="operations"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><PackagePlus size={18}/> Operasi Logistik</button>}
-          {hasAccess(["Super Admin", "Admin", "QC"]) && <button onClick={()=>handleNavClick("qc")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="qc"?"bg-emerald-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><CheckCircle size={18}/> Quality Control</button>}
+          {hasAccess(["Super Admin", "Admin", "QC"]) && <button onClick={()=>handleNavClick("qc")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="qc"?"bg-emerald-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><CheckCircle size={18}/><span className="flex-1 text-left">Quality Control</span>{dashboardSummary.pendingQcTotal>0&&<span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">{dashboardSummary.pendingQcTotal}</span>}</button>}
           <button onClick={()=>handleNavClick("history")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="history"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><History size={18}/> Riwayat Transaksi</button>
           <button onClick={()=>handleNavClick("reports")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="reports"?"bg-red-600 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><ClipboardList size={18}/> Laporan Produksi</button>
           {hasAccess(["Super Admin"]) && <button onClick={()=>handleNavClick("settings")} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeMenu==="settings"?"bg-slate-700 shadow-md font-semibold text-white":"hover:bg-slate-800 text-slate-300"}`}><Settings size={18}/> Pengaturan Sistem</button>}
@@ -6438,6 +6592,13 @@ Masukkan alasan override Super Admin:`
                 </div>
               </div>
 
+              <OperationalActionCenter
+                summary={dashboardSummary}
+                onInventoryAction={(filter)=>{setInventoryPriorityFilter(filter);handleNavClick("inventory");}}
+                onQcAction={hasAccess(["Super Admin","Admin","QC"]) ? ()=>handleNavClick("qc") : undefined}
+                onProcessAction={hasAccess(["Super Admin","Admin","Operator"]) ? ()=>{setActiveOpTab("rebagging");handleNavClick("operations");} : undefined}
+              />
+
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <div className="lg:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
                   <div className="flex items-center justify-between gap-4">
@@ -6497,7 +6658,21 @@ Masukkan alasan override Super Admin:`
                     Lihat Inventori Lengkap
                   </button>
                 </div>
-                <div className="max-h-[420px] overflow-auto">
+                <div className="space-y-3 p-4 md:hidden">
+                  {dashboardSummary.skuRows.map(row=>(
+                    <div key={row.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="font-mono text-[10px] font-black text-blue-600">{row.id}</div>
+                      <div className="mt-1 font-black text-slate-900">{row.name}</div>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-xl bg-white p-2"><div className="text-[9px] font-black text-slate-400">BATCH</div><div className="mt-1 font-black text-slate-800">{row.batchCount}</div></div>
+                        <div className="rounded-xl bg-emerald-50 p-2"><div className="text-[9px] font-black text-emerald-600">GOOD</div><div className="mt-1 font-black text-emerald-800">{row.good.toLocaleString("id-ID")}</div></div>
+                        <div className="rounded-xl bg-amber-50 p-2"><div className="text-[9px] font-black text-amber-600">PENDING QC</div><div className="mt-1 font-black text-amber-800">{row.pendingQc}</div></div>
+                      </div>
+                    </div>
+                  ))}
+                  {dashboardSummary.skuRows.length===0 && <div className="p-6 text-center text-sm italic text-slate-400">Belum ada persediaan aktif.</div>}
+                </div>
+                <div className="hidden max-h-[420px] overflow-auto md:block">
                   <table className="w-full min-w-[820px] text-sm">
                     <thead className="sticky top-0 bg-slate-50 text-slate-500">
                       <tr>
@@ -6565,7 +6740,46 @@ Masukkan alasan override Super Admin:`
                   </button>
                 </div>
               </div>
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full">
+              {inventoryPriorityFilter && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4 sm:p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-wider text-amber-700">Batch Prioritas</div>
+                      <div className="mt-1 font-black text-slate-900">
+                        {inventoryPriorityFilter==="expired" ? "Batch Expired" : inventoryPriorityFilter==="near30" ? "Kedaluwarsa ≤ 30 Hari" : "Kedaluwarsa 31–90 Hari"}
+                      </div>
+                    </div>
+                    <button type="button" onClick={()=>setInventoryPriorityFilter("")} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-black text-slate-600">Tutup Filter</button>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {priorityInventoryBatches.map(batch=>{
+                      const sku=skus.find(item=>item.id===batch.skuId);
+                      const info=getBatchExpiryInfo(batch);
+                      return (
+                        <div key={batch.batchId} className="rounded-xl border border-white bg-white p-3 shadow-sm">
+                          <div className="font-mono text-[10px] font-black text-blue-600">{batch.batchId}</div>
+                          <div className="mt-1 text-sm font-black text-slate-900">{sku?.name||batch.skuId}</div>
+                          <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold">
+                            <span className="rounded-full bg-slate-100 px-2 py-1">Stok {Number(batch.currentQty||0).toLocaleString("id-ID")} {sku?.unit||""}</span>
+                            <span className={`rounded-full px-2 py-1 ${info.isExpired?"bg-red-100 text-red-700":"bg-amber-100 text-amber-700"}`}>{info.label}</span>
+                            <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">Exp {batch.expiryDate||"-"}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {priorityInventoryBatches.length===0 && <div className="text-sm font-bold text-slate-500">Tidak ada batch untuk filter ini.</div>}
+                  </div>
+                </div>
+              )}
+
+              <InventoryMobileCards
+                skus={skus}
+                inventoryBatches={inventoryBatches}
+                activeInvTab={activeInvTab}
+                onDownload={handleDownloadInventoryCard}
+                inferWeightPerPackKg={inferWeightPerPackKg}
+              />
+              <div className="hidden bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto w-full md:block">
                 <table className="w-full text-sm text-left min-w-[920px]">
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
@@ -8097,6 +8311,21 @@ Masukkan alasan override Super Admin:`
                       </div>
                     </div>
                   </div>
+                  <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 sm:p-5">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-[0.14em] text-indigo-700">Kontrol Periode</div>
+                        <h4 className="mt-1 font-black text-slate-900">Kunci Periode Operasional</h4>
+                        <p className="mt-1 max-w-md text-xs leading-5 text-slate-600">Transaksi pada bulan yang sudah ditutup akan diblokir. Super Admin tetap dapat override dengan alasan yang masuk audit trail.</p>
+                      </div>
+                      <div className="w-full sm:w-52">
+                        <label className="mb-1.5 block text-xs font-bold text-slate-600">Periode dikunci s.d.</label>
+                        <input type="month" className="w-full rounded-xl border border-indigo-200 bg-white p-2.5 font-bold text-indigo-900 outline-none focus:border-indigo-500" value={systemConfig.closedThroughMonth||""} onChange={e=>setSystemConfig({...systemConfig,closedThroughMonth:e.target.value})}/>
+                        {systemConfig.closedThroughMonth && <button type="button" onClick={()=>setSystemConfig({...systemConfig,closedThroughMonth:""})} className="mt-2 text-[10px] font-black text-indigo-600">Buka kembali semua periode</button>}
+                      </div>
+                    </div>
+                  </div>
+
                   <div><label className="block font-bold text-slate-700 mb-2">Nama Aplikasi</label><input className="w-full border border-slate-300 p-3 rounded-lg outline-none focus:border-red-500" value={systemConfig.name} onChange={e=>setSystemConfig({...systemConfig, name: e.target.value})} /></div>
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">URL Logo (Opsional)</label>
@@ -8626,20 +8855,22 @@ Masukkan alasan override Super Admin:`
                         <strong>Backup otomatis:</strong> saat Reset Data Uji dijalankan, sistem membuat dan mengunduh file Excel arsip sebelum penghapusan dimulai.
                       </div>
 
+                      <IntegrityPanel report={integrityReport} onCheck={handleRunIntegrityCheck}/>
+
                       <div className="rounded-xl border border-violet-200 bg-violet-50 p-4">
                         <p className="text-xs font-bold uppercase tracking-wider text-violet-500">Import Data Lama</p>
                         <p className="mt-2 text-sm font-black text-violet-950">Ganti data operasional dengan Excel Inbound, Rebagging, dan QC</p>
                         <p className="mt-1 text-xs leading-5 text-violet-800">
                           Menghapus data operasional saat ini, membuat arsip otomatis, lalu mengisi ulang transaksi, stok batch, QC, Outbound, TM Hasil dari Excel, dan sequence batch. Batch produk jadi digenerate otomatis sesuai tanggal produksi.
                         </p>
-                        <label className={`mt-4 inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-black text-white shadow-lg transition-all ${legacyImportLoading || resetHistoryLoading ? "cursor-not-allowed bg-slate-300 shadow-none" : "cursor-pointer bg-violet-600 shadow-violet-100 hover:bg-violet-700"}`}>
+                        <label className={`mt-4 inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-black text-white shadow-lg transition-all ${legacyImportLoading || resetHistoryLoading || restoreArchiveLoading ? "cursor-not-allowed bg-slate-300 shadow-none" : "cursor-pointer bg-violet-600 shadow-violet-100 hover:bg-violet-700"}`}>
                           <FileUp size={18}/>
                           {legacyImportLoading ? "Mengimport..." : "Upload Excel Data Lama"}
                           <input
                             type="file"
                             accept=".xlsx,.xls"
                             className="hidden"
-                            disabled={legacyImportLoading || resetHistoryLoading}
+                            disabled={legacyImportLoading || resetHistoryLoading || restoreArchiveLoading}
                             onChange={handleImportLegacyOperationalData}
                           />
                         </label>
@@ -8649,16 +8880,21 @@ Masukkan alasan override Super Admin:`
                         <button
                           type="button"
                           onClick={handleArchiveOperationalData}
-                          disabled={resetHistoryLoading || legacyImportLoading}
+                          disabled={resetHistoryLoading || legacyImportLoading || restoreArchiveLoading}
                           className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-5 py-3 text-sm font-black text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <Download size={18}/> Arsip Data Operasional
                         </button>
 
+                        <label className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-5 py-3 text-sm font-black text-teal-700 hover:bg-teal-100 ${restoreArchiveLoading ? "pointer-events-none opacity-50" : ""}`}>
+                          <FileUp size={18}/> {restoreArchiveLoading ? "Merestore..." : "Restore Arsip Excel"}
+                          <input type="file" accept=".xlsx,.xls" className="hidden" disabled={restoreArchiveLoading || resetHistoryLoading || legacyImportLoading || restoreArchiveLoading} onChange={handleRestoreOperationalArchive}/>
+                        </label>
+
                         <button
                           type="button"
                           onClick={handleResetTransactionHistory}
-                          disabled={resetHistoryLoading || legacyImportLoading}
+                          disabled={resetHistoryLoading || legacyImportLoading || restoreArchiveLoading}
                           className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-red-100 transition-all hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                         >
                           <Trash2 size={18}/>
