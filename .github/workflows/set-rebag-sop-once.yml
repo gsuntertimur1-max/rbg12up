@@ -84,3 +84,5 @@ jobs:
           git add src/App.jsx .github/workflows/set-rebag-sop-once.yml
           git commit -m "docs: set official rebag production SOP reference"
           git push origin HEAD:main
+
+# Triggered intentionally after preparation commit.
