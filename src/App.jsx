@@ -39,7 +39,7 @@ const DEFAULT_SYSTEM_CONFIG = {
   rebagDocumentCode: "",
   rebagDocumentRevision: "",
   rebagDocumentEffectiveDate: "",
-  rebagSopRef: "",
+  rebagSopRef: "41/PR/2023 – Prosedur Produksi, Rev. 1, 05 April 2023",
   rebagSsopRef: "",
   rebagHaccpRef: "",
   rebagScaleId: "",
@@ -2696,9 +2696,24 @@ export default function App() {
       doc(db, "artifacts", appId, "public", "data", "config", "system"),
       (snap) => {
         if (snap.exists()) {
-          setSystemConfig({ ...DEFAULT_SYSTEM_CONFIG, ...snap.data() });
+          const savedConfig = snap.data();
+          const mergedConfig = { ...DEFAULT_SYSTEM_CONFIG, ...savedConfig };
+          if (!String(savedConfig.rebagSopRef || "").trim() && DEFAULT_SYSTEM_CONFIG.rebagSopRef) {
+            mergedConfig.rebagSopRef = DEFAULT_SYSTEM_CONFIG.rebagSopRef;
+            setDoc(
+              doc(db, "artifacts", appId, "public", "data", "config", "system"),
+              { rebagSopRef: DEFAULT_SYSTEM_CONFIG.rebagSopRef },
+              { merge: true }
+            ).catch((error) => console.error("Gagal mengisi referensi SOP/WI default:", error));
+          }
+          setSystemConfig(mergedConfig);
         } else {
           setSystemConfig(DEFAULT_SYSTEM_CONFIG);
+          setDoc(
+            doc(db, "artifacts", appId, "public", "data", "config", "system"),
+            DEFAULT_SYSTEM_CONFIG,
+            { merge: true }
+          ).catch((error) => console.error("Gagal menginisialisasi konfigurasi sistem:", error));
         }
       },
       handleDbError("konfigurasi")
